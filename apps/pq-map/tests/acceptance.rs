@@ -299,20 +299,16 @@ async fn ports_sweep_runs_the_shared_collector() {
         .await
         .expect("first run completes");
 
-    let swept = state1
-        .hosts
-        .get("localhost")
-        .expect("apex host present")
-        .ports
-        .iter()
-        .find(|s| s.port == open_port)
-        .expect("explicit port swept");
-    assert_eq!(
-        swept.state,
-        pq_map::model::ScanState::Open,
-        "bound port sweeps open"
+    assert!(
+        state1
+            .hosts
+            .get("localhost")
+            .expect("apex host present")
+            .ports
+            .iter()
+            .any(|s| s.port == open_port && s.state == pq_map::model::ScanState::Open),
+        "bound port sweeps open (any resolved address)"
     );
-
     use pq_core::evidence::CollectionRequest;
     let ports_key =
         pq_core::evidence::collectors::ports::PortsRequest::new("localhost", &[open_port])
@@ -322,6 +318,19 @@ async fn ports_sweep_runs_the_shared_collector() {
         .latest_usable_observation(&ports_key)
         .unwrap()
         .expect("sweep recorded as a usable success observation");
+    // The store-recorded sweep must contain the open result itself.
+    // `localhost` may resolve to several addresses (e.g. ::1 and 127.0.0.1
+    // on CI, where only v4 is bound) and the collector reports one row per
+    // (ip, port) — the store must hold the v4 row as `open`.
+    let recorded = pq_core::evidence::collectors::ports::observation_to_ports(&obs1).unwrap();
+    assert!(
+        recorded
+            .results
+            .iter()
+            .any(|r| r.port == open_port && r.state == "open"),
+        "store holds the open (ip, port) result: {:?}",
+        recorded.results
+    );
     ev.scan.finish().unwrap();
 
     // Immediate second run over the SAME store: the sweep is within its
@@ -338,15 +347,16 @@ async fn ports_sweep_runs_the_shared_collector() {
     let state2 = pq_map::collect::collect("localhost", &cfg, &opts, &ev2)
         .await
         .expect("second run completes");
-    let reswept = state2
-        .hosts
-        .get("localhost")
-        .unwrap()
-        .ports
-        .iter()
-        .find(|s| s.port == open_port)
-        .expect("second run still reports the swept port");
-    assert_eq!(reswept.state, pq_map::model::ScanState::Open);
+    assert!(
+        state2
+            .hosts
+            .get("localhost")
+            .unwrap()
+            .ports
+            .iter()
+            .any(|s| s.port == open_port && s.state == pq_map::model::ScanState::Open),
+        "second run still reports the swept port as open (any resolved address)"
+    );
     ev2.scan.finish().unwrap();
 
     let mut saw_collected = false;
