@@ -1,0 +1,119 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "pq-map-v*"
+      - "pq-pulse-v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build the tagged tool
+        run: |
+          tool="${GITHUB_REF_NAME%-v*}"
+          cargo build --release --package "$tool" --target ${{ matrix.target }}
+          echo "TOOL=$tool" >> "$GITHUB_ENV"
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME#*-v}"
+          dir="${TOOL}-v${version}-${{ matrix.target }}"
+          mkdir "${dir}"
+          cp "target/${{ matrix.target }}/release/${TOOL}" "${dir}/"
+          cp "apps/${TOOL}/README.md" "apps/${TOOL}/LICENSE" "${dir}/"
+          tar -czf "${dir}.tar.gz" "${dir}"
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
+          else
+            shasum -a 256 "${dir}.tar.gz" > "${dir}.tar.gz.sha256"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.TOOL }}-${{ matrix.target }}
+          path: |
+            ${{ env.TOOL }}-*.tar.gz
+            ${{ env.TOOL }}-*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag matches the tool's Cargo.toml version
+        run: |
+          tool="${GITHUB_REF_NAME%-v*}"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg tool "$tool" '.packages[] | select(.name == $tool) | .version')"
+          if [ "v${version}" != "${GITHUB_REF_NAME#*-}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match ${tool}'s Cargo.toml version v${version}"
+            exit 1
+          fi
+          echo "TOOL=$tool" >> "$GITHUB_ENV"
+      - name: Generate changelog
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: apps/${{ env.TOOL }}/cliff.toml
+          args: --verbose
+        env:
+          OUTPUT: apps/${{ env.TOOL }}/CHANGELOG.md
+          GITHUB_REPO: ${{ github.repository }}
+      - name: Commit changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "apps/${TOOL}/CHANGELOG.md"
+          if git diff --cached --quiet; then
+            echo "CHANGELOG.md unchanged"
+          else
+            git commit -m "chore(release): update ${TOOL} CHANGELOG.md for ${GITHUB_REF_NAME}"
+            git push origin HEAD:main
+          fi
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: apps/${{ env.TOOL }}/cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+          GITHUB_REPO: ${{ github.repository }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: ${{ env.TOOL }}-*
+          merge-multiple: true
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file RELEASE_NOTES.md \
+            dist/${TOOL}-*.tar.gz dist/${TOOL}-*.tar.gz.sha256

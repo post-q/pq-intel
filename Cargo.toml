@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/pq-core", "apps/pq-map", "apps/pq-pulse"]
+
+[workspace.package]
+version = "0.8.0"
+edition = "2024"
+rust-version = "1.85"
+license = "EUPL-1.2"
+repository = "https://github.com/post-q/pq-intel"
+
+[profile.release]
+lto = "thin"

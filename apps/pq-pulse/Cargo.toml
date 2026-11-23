@@ -1,0 +1,27 @@
+[package]
+name = "pq-pulse"
+version = "0.7.6"
+edition = "2024"
+description = "Post-quantum TLS key-exchange probe with CDN/edge/vendor attribution of the endpoint"
+license = "EUPL-1.2"
+repository = "https://github.com/post-q/pq-intel"
+readme = "README.md"
+rust-version = "1.85"
+keywords = ["tls", "post-quantum", "cdn", "cryptography", "network"]
+categories = ["command-line-utilities", "network-programming"]
+
+[dependencies]
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+rustls = "0.23.36"
+webpki-roots = "1.0.5"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+indicatif = "0.17"
+x509-parser = "0.16"
+ipnet = "2"
+pq-core = { path = "../../crates/pq-core" }
+hickory-proto = "0.24"
+tempfile = "3"
