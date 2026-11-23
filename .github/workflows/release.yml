@@ -27,7 +27,9 @@ jobs:
         run: |
           tool="${GITHUB_REF_NAME%-v*}"
           version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg tool "$tool" '.packages[] | select(.name == $tool) | .version')"
-          if [ "v${version}" != "${GITHUB_REF_NAME#*-}" ]; then
+          # Strip the "<crate>-v" prefix, not the first dash: crate names
+          # contain dashes themselves (pq-map-v0.8.1 -> v0.8.1).
+          if [ "${GITHUB_REF_NAME#"$tool"-v}" != "${version}" ]; then
             echo "::error::tag ${GITHUB_REF_NAME} does not match ${tool}'s Cargo.toml version v${version}"
             exit 1
           fi
