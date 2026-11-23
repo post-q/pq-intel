@@ -292,6 +292,15 @@ mod tests {
     }
 
     #[test]
+    fn cert_signature_from_db_maps_ec_curve_from_key_size() {
+        assert_eq!(
+            cert_signature_from_db(Some("EC"), Some(256), Some("ECDSA"), Some("SHA-256")),
+            Some("ECDSA-P256".to_string())
+        );
+        assert_eq!(cert_signature_from_db(None, None, None, None), None);
+    }
+
+    #[test]
     fn symmetric_names_from_suite_names() {
         assert_eq!(symmetric_name("TLS13_AES_256_GCM_SHA384").as_deref(), Some("AES256-GCM"));
         assert_eq!(symmetric_name("TLS_AES_128_GCM_SHA256").as_deref(), Some("AES128-GCM"));
