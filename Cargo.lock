@@ -1340,7 +1340,7 @@ dependencies = [
 
 [[package]]
 name = "pq-map"
-version = "0.2.3"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "futures",

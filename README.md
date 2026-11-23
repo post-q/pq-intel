@@ -44,12 +44,12 @@ cargo test --all
 Commits follow the [Conventional Commits](https://www.conventionalcommits.org)
 specification; CI rejects non-conforming messages.
 
-Releases are one crate per tag (`pq-core-v…`, `pq-map-v…`, `pq-pulse-v…`,
-tag must match the crate's version): each publishes to
+Releases are one version across the workspace: `cargo release <level>`
+bumps it for every crate, cuts `pq-core-v…`/`pq-map-v…`/`pq-pulse-v…`
+tags and pushes; each tag publishes its crate to
 [crates.io](https://crates.io), tool tags additionally attach prebuilt
 binaries to [GitHub Releases](https://github.com/post-q/pq-intel/releases).
-`pq-core` is a dependency of both tools — publish it first when its version
-changes. The store's design specification is
+The store's design specification is
 [`specs/evidence-store-v1.md`](specs/evidence-store-v1.md).
 
 ## License

@@ -7,3 +7,8 @@
 # git-cliff pre-release hook).
 publish = false
 push-remote = "origin"
+
+# One version across the workspace: every crate inherits
+# [workspace.package].version, `cargo release <level>` bumps it for all.
+shared-version = true
+consolidate-commits = true
