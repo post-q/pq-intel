@@ -1,0 +1,43 @@
+# Port policy for the ports sweep (pq-map collect --ports, remote collectors
+# with the ports capture). Data, not code: edit this file to change which
+# ports get probed - no rebuild needed.
+#
+# A host is matched to ONE service: the first entry whose `prefixes`
+# contain the host's first DNS label (prefix match) wins. The last entry
+# (no `prefixes`) is the fallback for everything else. pq-map's DNS MX
+# detection matches a host as if its label were `mx`.
+#
+# Ports are probed with TLS on connect; `starttls: true` marks ports that
+# upgrade in-band first (SMTP STARTTLS, XMPP stream negotiation). At most
+# PORT_CAP (5) ports are probed per host, in file order.
+#
+# Point the tools at this file with PORT_POLICY=/path/to/port-policy.yml.
+
+smtp:
+  prefixes: [smtp, mx, mailrelay, mailout, post]
+  ports:
+    - { port: 465 }
+    - { port: 587, starttls: true }
+    - { port: 25, starttls: true }
+imaps:
+  prefixes: [imap, webmail, mail]
+  ports: [993, 995, 465, 587]
+pop3s:
+  prefixes: [pop]
+  ports: [995]
+sips:
+  prefixes: [sip, sips]
+  ports: [5061]
+ldaps:
+  prefixes: [ldap, ldaps, directory]
+  ports: [636]
+mqtt:
+  prefixes: [mqtt, broker]
+  ports: [1883, 8883]
+xmpp:
+  prefixes: [xmpp, jabber, conference, chat]
+  ports:
+    - { port: 5222, starttls: true }
+    - { port: 5223 }
+default:
+  ports: [8443, 9443, 4443, 8843, 10000]

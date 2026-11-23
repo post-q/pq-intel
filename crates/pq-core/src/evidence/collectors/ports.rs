@@ -211,13 +211,21 @@ impl Collector for PortsCollector {
     }
 }
 
-/// Sweep POLICY: which ports a host family gets (port presets and
-/// service-kind classification). The sweep itself is the parent module's
-/// [`PortsCollector`]; this policy decides the request. Shared by every
-/// binary that sweeps - pq-map's collect path and the remote collectors -
-/// so one host family always means one port set, wherever it is asked.
+/// Sweep POLICY: which ports a host family gets. The sweep itself is the
+/// parent module's [`PortsCollector`]; this policy decides the request.
+/// Shared by every binary that sweeps - pq-map's collect path and the
+/// remote collectors - so one host family always means one port set,
+/// wherever it is asked.
+///
+/// The table is data, not code: a YAML file (`PortPolicy::from_yaml`)
+/// maps service names to the ports they get probed, plus the first-label
+/// prefixes that select the service. Editing which ports a service gets
+/// is a file edit, never a rebuild.
 pub mod presets {
-    /// Service-kind classification for preset ports: a DirectTls port speaks
+    use serde::Deserialize;
+    use std::path::Path;
+
+    /// Service-kind classification for probed ports: a DirectTls port speaks
     /// TLS on connect; a StartTls port upgrades in-band first.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum PortKind {
@@ -225,63 +233,145 @@ pub mod presets {
         StartTls,
     }
 
-    const GENERIC_WEB: &[(u16, PortKind)] = &[
-        (8443, PortKind::DirectTls),
-        (9443, PortKind::DirectTls),
-        (4443, PortKind::DirectTls),
-        (8843, PortKind::DirectTls),
-        (10000, PortKind::DirectTls),
-    ];
-
     pub const PORT_CAP: usize = 5;
 
-    /// Ports for one host: family tables by first-label heuristics
-    /// (mx/webmail/pop/sip/ldap/mqtt/xmpp), `generic_override` replacing
-    /// the generic web list when set, capped at [`PORT_CAP`].
+    /// One probed port: `starttls` marks ports that upgrade in-band
+    /// (SMTP STARTTLS, XMPP stream negotiation) before the TLS probe.
+    /// The YAML shorthand (a bare integer) means DirectTls.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PortSpec {
+        pub port: u16,
+        pub starttls: bool,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum PortSpecRaw {
+        Plain(u16),
+        Full {
+            port: u16,
+            #[serde(default)]
+            starttls: bool,
+        },
+    }
+
+    #[derive(Deserialize)]
+    struct FamilyEntry {
+        #[serde(default)]
+        prefixes: Vec<String>,
+        #[serde(default)]
+        ports: Vec<PortSpecRaw>,
+    }
+
+    /// The parsed port policy: ordered families, first prefix match wins,
+    /// the prefixless `default` family (must be last) is the fallback.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PortPolicy {
+        families: Vec<(String, Vec<String>, Vec<PortSpec>)>,
+    }
+
+    impl PortPolicy {
+        /// Parse a policy file (see port-policy.yml at the repo root for
+        /// the format).
+        pub fn from_yaml(text: &str) -> Result<Self, String> {
+            let map: serde_yaml::Mapping = serde_yaml::from_str(text)
+                .map_err(|e| format!("port policy: {e}"))?;
+            let mut families = Vec::new();
+            for (key, value) in map {
+                let name = key
+                    .as_str()
+                    .ok_or_else(|| "port policy: service names must be strings".to_string())?
+                    .to_string();
+                let entry: FamilyEntry = serde_yaml::from_value(value)
+                    .map_err(|e| format!("port policy: {name}: {e}"))?;
+                let ports = entry
+                    .ports
+                    .into_iter()
+                    .map(|raw| match raw {
+                        PortSpecRaw::Plain(port) => PortSpec { port, starttls: false },
+                        PortSpecRaw::Full { port, starttls } => PortSpec { port, starttls },
+                    })
+                    .collect();
+                families.push((name, entry.prefixes, ports));
+            }
+            let fallbacks = families.iter().filter(|(_, p, _)| p.is_empty()).count();
+            if fallbacks != 1 {
+                return Err(format!(
+                    "port policy: exactly one fallback family (no `prefixes`) is required, found {fallbacks}"
+                ));
+            }
+            if !families.last().is_some_and(|(_, p, _)| p.is_empty()) {
+                return Err(
+                    "port policy: the fallback family (no `prefixes`) must be last".to_string(),
+                );
+            }
+            let policy = Self { families };
+            for (_, _, ports) in &policy.families {
+                for spec in ports {
+                    if spec.port == 0 {
+                        return Err("port policy: port 0 is not a service port".to_string());
+                    }
+                }
+            }
+            Ok(policy)
+        }
+
+        /// Load a policy file from disk.
+        pub fn load(path: &Path) -> Result<Self, String> {
+            let text = std::fs::read_to_string(path)
+                .map_err(|e| format!("port policy {}: {e}", path.display()))?;
+            Self::from_yaml(&text)
+        }
+    }
+
+    /// Ports for one host: the first family whose `prefixes` contain the
+    /// host's first DNS label (prefix match); `generic_override` (an
+    /// explicit CLI port list) replaces the family table verbatim, capped
+    /// at [`PORT_CAP`]. `is_mx` (the map's DNS MX detection) matches as if
+    /// the label were `mx`.
     pub fn ports_for_host(
         name: &str,
+        policy: &PortPolicy,
         generic_override: &[u16],
         is_mx: bool,
     ) -> Vec<(u16, PortKind)> {
+        if !generic_override.is_empty() {
+            return generic_override
+                .iter()
+                .take(PORT_CAP)
+                .map(|p| (*p, PortKind::DirectTls))
+                .collect();
+        }
         let label = name.split('.').next().unwrap_or("").to_ascii_lowercase();
-        let table: &[(u16, PortKind)] =
-            if is_mx || starts_any(&label, &["smtp", "mx", "mailrelay", "mailout", "post"]) {
-                &[
-                    (465, PortKind::DirectTls),
-                    (587, PortKind::StartTls),
-                    (25, PortKind::StartTls),
-                ]
-            } else if starts_any(&label, &["imap", "webmail", "mail"]) {
-                &[
-                    (993, PortKind::DirectTls),
-                    (995, PortKind::DirectTls),
-                    (465, PortKind::DirectTls),
-                    (587, PortKind::StartTls),
-                ]
-            } else if label.starts_with("pop") {
-                &[(995, PortKind::DirectTls)]
-            } else if starts_any(&label, &["sip", "sips"]) {
-                &[(5061, PortKind::DirectTls)]
-            } else if starts_any(&label, &["ldap", "ldaps", "directory"]) {
-                &[(636, PortKind::DirectTls)]
-            } else if starts_any(&label, &["mqtt", "broker"]) {
-                &[(8883, PortKind::DirectTls)]
-            } else if starts_any(&label, &["xmpp", "jabber", "conference", "chat"]) {
-                &[(5222, PortKind::StartTls), (5223, PortKind::DirectTls)]
-            } else if generic_override.is_empty() {
-                GENERIC_WEB
-            } else {
-                return generic_override
-                    .iter()
-                    .take(PORT_CAP)
-                    .map(|p| (*p, PortKind::DirectTls))
-                    .collect();
-            };
-        table.iter().take(PORT_CAP).copied().collect()
-    }
-
-    fn starts_any(label: &str, prefixes: &[&str]) -> bool {
-        prefixes.iter().any(|p| label.starts_with(p))
+        let match_label: std::borrow::Cow<str> = if is_mx {
+            "mx".into()
+        } else {
+            label.into()
+        };
+        let (_, _, ports) = policy
+            .families
+            .iter()
+            .find(|(_, prefixes, _)| {
+                prefixes.is_empty()
+                    || prefixes
+                        .iter()
+                        .any(|p| match_label.starts_with(p.as_str()))
+            })
+            .expect("validated: a fallback family exists");
+        ports
+            .iter()
+            .take(PORT_CAP)
+            .map(|s| {
+                (
+                    s.port,
+                    if s.starttls {
+                        PortKind::StartTls
+                    } else {
+                        PortKind::DirectTls
+                    },
+                )
+            })
+            .collect()
     }
 
     /// Well-known service name of a swept port (for labels/rendering).
@@ -300,25 +390,64 @@ pub mod presets {
         }
     }
 
+    /// The reference table shipped at the pq-intel root (port-policy.yml),
+    /// inlined for tests.
+    #[cfg(test)]
+    fn reference_policy() -> PortPolicy {
+        PortPolicy::from_yaml(
+            "smtp:
+  prefixes: [smtp, mx, mailrelay, mailout, post]
+  ports:
+    - { port: 465 }
+    - { port: 587, starttls: true }
+    - { port: 25, starttls: true }
+imaps:
+  prefixes: [imap, webmail, mail]
+  ports: [993, 995, 465, 587]
+pop3s:
+  prefixes: [pop]
+  ports: [995]
+sips:
+  prefixes: [sip, sips]
+  ports: [5061]
+ldaps:
+  prefixes: [ldap, ldaps, directory]
+  ports: [636]
+mqtt:
+  prefixes: [mqtt, broker]
+  ports: [1883, 8883]
+xmpp:
+  prefixes: [xmpp, jabber, conference, chat]
+  ports:
+    - { port: 5222, starttls: true }
+    - { port: 5223 }
+default:
+  ports: [8443, 9443, 4443, 8843, 10000]
+",
+        )
+        .unwrap()
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
 
         #[test]
         fn family_matching_is_ordered() {
-            let smtp = ports_for_host("mx1c.example.com", &[], false);
+            let policy = reference_policy();
+            let smtp = ports_for_host("mx1c.example.com", &policy, &[], false);
             assert_eq!(smtp.len(), 3);
             assert_eq!(smtp[0].0, 465);
             assert!(matches!(smtp[1].1, PortKind::StartTls));
 
-            let mail = ports_for_host("webmail.example.pl", &[], false);
+            let mail = ports_for_host("webmail.example.pl", &policy, &[], false);
             assert_eq!(mail[0].0, 993);
             assert_eq!(mail.len(), 4);
 
-            let xmpp = ports_for_host("conference.examplex.com", &[], false);
+            let xmpp = ports_for_host("conference.examplex.com", &policy, &[], false);
             assert_eq!(xmpp.iter().map(|p| p.0).collect::<Vec<_>>(), vec![5222, 5223]);
 
-            let web = ports_for_host("vpn.example.pl", &[], false);
+            let web = ports_for_host("vpn.example.pl", &policy, &[], false);
             assert_eq!(
                 web.iter().map(|p| p.0).collect::<Vec<_>>(),
                 vec![8443, 9443, 4443, 8843, 10000]
@@ -327,24 +456,50 @@ pub mod presets {
         }
 
         #[test]
-        fn generic_override_replaces_web_list() {
-            let ports = ports_for_host("vpn.example.pl", &[7000, 7001, 7002], false);
+        fn mx_detection_matches_smtp_family() {
+            let policy = reference_policy();
+            let forced = ports_for_host("mailhost.example.pl", &policy, &[], true);
+            assert_eq!(forced[0].0, 465);
+            assert!(matches!(forced[1].1, PortKind::StartTls));
+        }
+
+        #[test]
+        fn generic_override_replaces_family_table() {
+            let policy = reference_policy();
+            let ports = ports_for_host("vpn.example.pl", &policy, &[7000, 7001, 7002], false);
             assert_eq!(
                 ports.iter().map(|p| p.0).collect::<Vec<_>>(),
                 vec![7000, 7001, 7002]
             );
-            let smtp = ports_for_host("mx.example.pl", &[7000], false);
-            assert_eq!(smtp[0].0, 465);
+            let smtp = ports_for_host("mx.example.pl", &policy, &[7000], false);
+            assert_eq!(smtp[0].0, 7000);
         }
 
         #[test]
         fn port_cap_holds_for_every_family() {
+            let policy = reference_policy();
             for name in [
                 "mx.a.pl", "mail.a.pl", "pop.a.pl", "sip.a.pl", "ldap.a.pl", "mqtt.a.pl",
                 "xmpp.a.pl", "web.a.pl",
             ] {
-                assert!(ports_for_host(name, &[], false).len() <= PORT_CAP, "{name}");
+                assert!(ports_for_host(name, &policy, &[], false).len() <= PORT_CAP, "{name}");
             }
+        }
+
+        #[test]
+        fn policy_validation_rejects_bad_files() {
+            // No fallback family at all.
+            assert!(PortPolicy::from_yaml("smtp:\n  prefixes: [mx]\n  ports: [25]\n").is_err());
+            // Two fallbacks.
+            assert!(PortPolicy::from_yaml("a:\n  ports: [25]\nb:\n  ports: [80]\n").is_err());
+            // Fallback not last.
+            assert!(PortPolicy::from_yaml("a:\n  ports: [25]\ndefault:\n  ports: [80]\nsmtp:\n  prefixes: [mx]\n  ports: [465]\n").is_err());
+            // Bare integers are DirectTls; objects can be StartTls.
+            let p = PortPolicy::from_yaml("default:\n  ports:\n    - 443\n    - { port: 587, starttls: true }\n").unwrap();
+            let ports = ports_for_host("x.example", &p, &[], false);
+            assert_eq!(ports.len(), 2);
+            assert!(matches!(ports[0].1, PortKind::DirectTls));
+            assert!(matches!(ports[1].1, PortKind::StartTls));
         }
     }
 }
