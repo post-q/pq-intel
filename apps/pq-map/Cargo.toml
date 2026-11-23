@@ -32,7 +32,7 @@ rustls = { version = "0.23", features = ["aws-lc-rs", "prefer-post-quantum"] }
 tokio-rustls = "0.26"
 x509-parser = "0.16"
 futures = "0.3"
-pq-core = { version = "0.8.0", path = "../../crates/pq-core" }
+pq-core = { version = "0.8.1", path = "../../crates/pq-core" }
 
 [dev-dependencies]
 tempfile = "3"
