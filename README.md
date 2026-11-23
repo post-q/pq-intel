@@ -1,39 +1,37 @@
 # pq-intel
 
-Externally observable infrastructure intelligence, collected once and shared
-by every tool: a SQLite-backed evidence and knowledge store with
-content-addressed artifacts, plus the tools that collect through it.
+Externally observable infrastructure intelligence: a shared SQLite-backed
+evidence store, and the tools that collect through it.
 
-## What is here
+## Crates
 
-- **`crates/pq-core`** — the shared evidence store and its collectors.
-  Collections identify repeatable requests by a canonical, versioned,
-  content-hashed identity; observations record results append-only with full
-  provenance (what was asked, which collector, which source answered, when,
-  and the protocol-level status); raw evidence is preserved as
-  SHA-256-content-addressed, compressed, deduplicated artifacts; per-source
-  refresh policies decide when cached data may be reused — stale data is
-  revalidated on read, blocking, and never silently presented as current.
-  Collectors cover DNS (and DoH), HTTP, TLS, Certificate Transparency (the
-  crt.sh JSON API and the certwatch PostgreSQL read path), RDAP, RIPEstat,
-  and a conservative connect-sweep port scan. Failures are recorded, never
-  overwrite the last usable result, and a timeout is "unknown", never
-  "nonexistent".
-- **`apps/pq-map`** — domain service and cryptography discovery from
-  Certificate Transparency and DNS: CT snapshots, DNS sweeps, TLS probing,
-  port sweeps, graph rendering. Fully store-backed.
-- **`apps/pq-pulse`** — post-quantum TLS key-exchange probe with CDN/edge and
-  vendor attribution of the endpoint. Store-backed.
+- [`pq-core`](crates/pq-core) — the evidence store and its collectors (DNS
+  and DoH, HTTP, TLS, Certificate Transparency, RDAP, RIPEstat, a
+  conservative port sweep); append-only observations with full provenance,
+  content-addressed artifacts, policy-driven cache reuse
+- [`pq-map`](apps/pq-map) — domain service and cryptography discovery from
+  Certificate Transparency and DNS
+- [`pq-pulse`](apps/pq-pulse) — post-quantum TLS key-exchange probe with
+  CDN/edge and vendor attribution of the endpoint
 
-## Using the store
+## The store
 
-The store lives at `$XDG_DATA_HOME/pq-intel/evidence.db`
-(`~/.local/share/pq-intel` by default) with an `artifacts/` subtree beside
-it. Every tool run opens a scan and records exactly which observations it
-consumed, labeled by usage class (collected / cached / refreshed /
-historical), so any past run can be reconstructed and its network cost
-audited. All tools share one store: nothing re-fetches what another tool
-already collected.
+One SQLite database shared by every tool, at
+`$XDG_DATA_HOME/pq-intel/evidence.db` (`~/.local/share/pq-intel` by
+default). Observations are recorded append-only; a failure never overwrites
+the last usable result, and a timeout is "unknown", never "nonexistent".
+Cached data is reused only within its freshness policy — stale data is
+revalidated on read. Every run records which observations it consumed, so
+its network cost is auditable; nothing re-fetches what another tool already
+collected.
+
+## Build
+
+Requires Rust (stable, >= 1.85). If needed, install via [rustup](https://rustup.rs)
+
+```console
+$ cargo build --release
+```
 
 ## Development
 
@@ -43,20 +41,17 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all
 ```
 
-Commits follow the Conventional Commits format. CI checks formatting,
-clippy, tests, and commit messages.
+Commits follow the [Conventional Commits](https://www.conventionalcommits.org)
+specification; CI rejects non-conforming messages.
 
-Releases are tag-driven, one crate per tag: `pq-core-v…`, `pq-map-v…`,
-`pq-pulse-v…` (tag must match the crate's `Cargo.toml` version). Every
-tag publishes the crate to [crates.io](https://crates.io) (needs the
-`CARGO_REGISTRY_TOKEN` repo secret); tool tags additionally attach
-release binaries for three targets to a GitHub release. `pq-core` is a
-dependency of both tools, so publish `pq-core` first when its version
-changes — the tools' `pq-core = { version = … }` entries track it. The
-design specification of the store is
+Releases are one crate per tag (`pq-core-v…`, `pq-map-v…`, `pq-pulse-v…`,
+tag must match the crate's version): each publishes to
+[crates.io](https://crates.io), tool tags additionally attach prebuilt
+binaries to [GitHub Releases](https://github.com/post-q/pq-intel/releases).
+`pq-core` is a dependency of both tools — publish it first when its version
+changes. The store's design specification is
 [`specs/evidence-store-v1.md`](specs/evidence-store-v1.md).
 
 ## License
 
-`pq-map`, `pq-pulse`, and `pq-core` are licensed under the
-[European Union Public Licence v. 1.2](LICENSE) (EUPL-1.2).
+Licensed under the [European Union Public Licence v. 1.2](LICENSE) (EUPL-1.2).
