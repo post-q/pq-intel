@@ -1,0 +1,6 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release
+
+# cargo-release only bumps, commits, tags, and pushes;
+# crates.io publishing happens in GH CI (.github/workflows/release.yml publish job).
+publish = false

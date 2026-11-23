@@ -1,0 +1,9 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release
+
+# Workspace defaults: cargo-release only bumps, commits, tags, and pushes;
+# crates.io publishing happens in GH CI (.github/workflows/release.yml
+# publish job). Per-crate release.toml may add to this (e.g. the tools'
+# git-cliff pre-release hook).
+publish = false
+push-remote = "origin"
