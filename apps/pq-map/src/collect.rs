@@ -59,7 +59,7 @@ pub async fn collect(
     apex.name = domain.to_string();
     apex.origins.insert(Origins::APEX);
     for rec in &discovery.srv {
-        if dns::in_domain(&rec.target, domain) {
+        if pq_core::net::in_domain(&rec.target, domain) {
             let host = hosts.entry(rec.target.clone()).or_default();
             host.name = rec.target.clone();
             host.origins.insert(Origins::DNS);

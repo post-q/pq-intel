@@ -1323,6 +1323,7 @@ version = "0.8.1"
 dependencies = [
  "chrono",
  "hickory-proto",
+ "openssl",
  "rusqlite",
  "rustls",
  "rustls-pki-types",
@@ -1347,7 +1348,6 @@ dependencies = [
  "futures",
  "hickory-proto",
  "hickory-resolver",
- "openssl",
  "pq-core",
  "rustls",
  "serde",
