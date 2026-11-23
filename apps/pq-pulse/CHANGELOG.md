@@ -1,13 +1,5 @@
 # Changelog
-## pq-pulse-v0.8.1 - 2026-11-23
-
-### Bug Fixes
-- Ports acceptance assertion robust to multi-address localhost
-- Hold the acceptance env lock across awaits with tokio's mutex
-- Tag-version check strips the crate prefix, not the first dash
-
-### Documentation
-- Lean README in the tools' style
+## 0.8.2 - 2026-11-23
 
 ### Features
 - The evidence plane — shared evidence store, collectors, pq-map, pq-pulse
