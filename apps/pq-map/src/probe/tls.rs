@@ -1,8 +1,13 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
-use crate::discover::ct;
 use crate::model::{Negotiated, ServedCert};
+
+use pq_core::evidence::collectors::ct::serial_norm;
+use pq_core::x509::{
+    curve_from_oid, issuer_rfc2253, live_cert_signature, pubkey_alg_from_oid, sig_alg_from_der,
+    sig_alg_from_oid,
+};
 
 use super::Failure;
 
@@ -238,10 +243,17 @@ fn tls_over_stream(
 pub fn served_cert_from_der(der: &[u8]) -> Option<ServedCert> {
     let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
 
-    let serial = ct::serial_norm(&hex_lower(cert.raw_serial()));
-    let pubkey_alg = Some(oid_name(&cert.subject_pki.algorithm.algorithm, PUBKEY_OIDS));
-    let sig_alg = Some(oid_name(&cert.signature_algorithm.algorithm, SIG_OIDS));
-    let pubkey_curve = curve_from_params(&cert.subject_pki.algorithm.parameters);
+    let serial = serial_norm(&hex_lower(cert.raw_serial()));
+    let pubkey_alg = Some(pubkey_alg_from_oid(&cert.subject_pki.algorithm.algorithm));
+    let sig_alg = Some(sig_alg_from_oid(&cert.signature_algorithm.algorithm));
+    let pubkey_curve = cert
+        .subject_pki
+        .algorithm
+        .parameters
+        .as_ref()
+        .and_then(|p| p.as_oid().ok())
+        .and_then(|o| curve_from_oid(&o))
+        .map(str::to_string);
     let cert_signature = live_cert_signature(
         pubkey_alg.as_deref(),
         sig_alg.as_deref(),
@@ -295,142 +307,15 @@ pub fn served_cert_from_der(der: &[u8]) -> Option<ServedCert> {
     })
 }
 
-fn curve_from_params(params: &Option<x509_parser::der_parser::asn1_rs::Any>) -> Option<String> {
-    let params = params.as_ref()?;
-    let dotted = params.as_oid().ok()?.to_id_string();
-    EC_CURVE_OIDS
-        .iter()
-        .find(|(k, _)| *k == dotted)
-        .map(|(_, v)| v.to_string())
-}
-
-fn live_cert_signature(
-    pubkey_alg: Option<&str>,
-    sig_alg: Option<&str>,
-    curve: Option<String>,
-) -> Option<String> {
-    let sig = sig_alg?;
-    let lower = sig.to_ascii_lowercase();
-    let (class, hash): (String, Option<&str>) = if lower.contains("ecdsa") {
-        ("ECDSA".to_string(), hash_from_sig(&lower))
-    } else if lower.contains("ed25519") {
-        ("Ed25519".to_string(), None)
-    } else if lower.contains("ed448") {
-        ("Ed448".to_string(), None)
-    } else if lower.contains("rsa") {
-        ("RSA".to_string(), hash_from_sig(&lower))
-    } else if let Some(pubkey) = pubkey_alg {
-        (crate::model::alg_class_of(pubkey), hash_from_sig(&lower))
-    } else {
-        (sig.to_string(), None)
-    };
-    crate::model::cert_signature_name(&class, hash, curve.as_deref())
-}
-
-/// "sha256WithRSAEncryption" → "SHA256", "SHA-384" → "SHA384".
-fn hash_from_sig(sig_lower: &str) -> Option<&'static str> {
-    const HASHES: [(&str, &str); 5] = [
-        ("sha512", "SHA512"),
-        ("sha384", "SHA384"),
-        ("sha256", "SHA256"),
-        ("sha1", "SHA1"),
-        ("md5", "MD5"),
-    ];
-    HASHES
-        .iter()
-        .find(|(needle, _)| sig_lower.contains(needle))
-        .map(|(_, name)| *name)
+fn served_with_chain_sigs(mut served: ServedCert, chain_sigs: Vec<String>) -> ServedCert {
+    served.chain_sigs = chain_sigs;
+    served
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Signature algorithm name of a DER certificate (shared: leaf + chain scan).
-pub fn sig_alg_from_der(der: &[u8]) -> Option<String> {
-    let (_, cert) = x509_parser::parse_x509_certificate(der).ok()?;
-    Some(oid_name(&cert.signature_algorithm.algorithm, SIG_OIDS))
-}
-
-fn served_with_chain_sigs(mut served: ServedCert, chain_sigs: Vec<String>) -> ServedCert {
-    served.chain_sigs = chain_sigs;
-    served
-}
-
-const PUBKEY_OIDS: &[(&str, &str)] = &[
-    ("1.2.840.113549.1.1.1", "rsaEncryption"),
-    ("1.2.840.113549.1.1.10", "rsassaPss"),
-    ("1.2.840.10045.2.1", "id-ecPublicKey"),
-    ("1.3.101.112", "Ed25519"),
-    ("1.3.101.113", "Ed448"),
-];
-
-const SIG_OIDS: &[(&str, &str)] = &[
-    ("1.2.840.113549.1.1.4", "md5WithRSAEncryption"),
-    ("1.2.840.113549.1.1.5", "sha1WithRSAEncryption"),
-    ("1.2.840.113549.1.1.11", "sha256WithRSAEncryption"),
-    ("1.2.840.113549.1.1.12", "sha384WithRSAEncryption"),
-    ("1.2.840.113549.1.1.13", "sha512WithRSAEncryption"),
-    ("1.2.840.113549.1.1.10", "rsassaPss"),
-    ("1.2.840.10045.4.1", "ecdsa-with-SHA1"),
-    ("1.2.840.10045.4.3.2", "ecdsa-with-SHA256"),
-    ("1.2.840.10045.4.3.3", "ecdsa-with-SHA384"),
-    ("1.2.840.10045.4.3.4", "ecdsa-with-SHA512"),
-    ("1.3.101.112", "Ed25519"),
-    ("1.3.101.114", "Ed448"),
-    ("2.16.840.1.101.3.4.3.17", "ML-DSA-44"),
-    ("2.16.840.1.101.3.4.3.18", "ML-DSA-65"),
-    ("2.16.840.1.101.3.4.3.19", "ML-DSA-87"),
-];
-
-const EC_CURVE_OIDS: &[(&str, &str)] = &[
-    ("1.2.840.10045.3.1.7", "P256"),
-    ("1.3.132.0.34", "P384"),
-    ("1.3.132.0.35", "P521"),
-];
-
-fn oid_name(oid: &x509_parser::der_parser::oid::Oid, table: &[(&str, &str)]) -> String {
-    let dotted = oid.to_id_string();
-    table
-        .iter()
-        .find(|(k, _)| *k == dotted)
-        .map(|(_, v)| v.to_string())
-        .unwrap_or(dotted)
-}
-
-const RDN_SHORT_NAMES: &[(&str, &str)] = &[
-    ("2.5.4.3", "CN"),
-    ("2.5.4.6", "C"),
-    ("2.5.4.7", "L"),
-    ("2.5.4.8", "ST"),
-    ("2.5.4.10", "O"),
-    ("2.5.4.11", "OU"),
-    ("2.5.4.5", "serialNumber"),
-    ("0.9.2342.19200300.100.1.25", "DC"),
-    ("1.2.840.113549.1.9.1", "emailAddress"),
-];
-
-/// RFC 2253 rendering (most specific RDN first), like `openssl -nameopt RFC2253`.
-fn issuer_rfc2253(name: &x509_parser::x509::X509Name) -> String {
-    let parts: Vec<String> = name
-        .iter_rdn()
-        .flat_map(|rdn| rdn.iter())
-        .map(|atv| {
-            let dotted = atv.attr_type().to_id_string();
-            let key = RDN_SHORT_NAMES
-                .iter()
-                .find(|(k, _)| *k == dotted)
-                .map(|(_, v)| v.to_string())
-                .unwrap_or(dotted);
-            let value = atv
-                .as_str()
-                .map(std::borrow::ToOwned::to_owned)
-                .unwrap_or_else(|_| String::from_utf8_lossy(atv.as_slice()).into_owned());
-            format!("{key}={value}")
-        })
-        .collect();
-    parts.into_iter().rev().collect::<Vec<_>>().join(",")
-}
 
 #[cfg(test)]
 mod tests {

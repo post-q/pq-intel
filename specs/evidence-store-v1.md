@@ -113,6 +113,7 @@ enum DataStatus { Fresh, Stale, Expired, Unavailable }
 - **RDAP**: by canonical lookup target and provider; original JSON preserved as artifact; normalized extraction deferred to v2.
 - **RIPEstat**: per-endpoint identities (`ripestat.network-info`, `ripestat.routing-status`, …) with per-endpoint policies; historical (finalized-interval) queries cached indefinitely.
 - Domain/hostname normalization reuses `pq-core`'s existing normalization logic.
+- *(Amended 2026-11-23, user decision: the no-reinvented-wheels line is enforced — all certwatch semantics (`ctdate`, name/coverage/serial/validity math), X.509 naming (OID tables, canonical signature/key names, cipher suites), and port presets live in `pq-core` (`evidence::collectors::ct`, `x509`, `collectors::ports::presets`). pq-map and pq-pulse keep only presentation and their own decision models; edge binaries never copy core data tables or policy.)*
 
 **Cutover**
 

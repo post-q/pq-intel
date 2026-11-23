@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 
-use crate::model::{
-    ChainEntry, DomainState, Host, MatchKind, ProbeStatus, cert_key_name, cert_signature_from_db,
-};
+use crate::model::{ChainEntry, DomainState, Host, ProbeStatus};
+
+use pq_core::evidence::collectors::ct::MatchKind;
+use pq_core::evidence::collectors::ports::presets::port_service;
+use pq_core::x509::{cert_key_name, cert_signature_from_db, symmetric_name};
 
 use serde::Serialize;
 
@@ -271,7 +273,7 @@ pub fn graph(state: &DomainState) -> String {
                 continue;
             }
             let id = format!("service:tcp/{}", scan.port);
-            let label = format!("{}:{}", crate::model::port_service(scan.port), scan.port);
+            let label = format!("{}:{}", port_service(scan.port), scan.port);
             node(&mut nodes, &id, label, "service", "tcp_service");
             links.insert((host_id.clone(), id, "exposes"));
         }
@@ -283,7 +285,7 @@ pub fn graph(state: &DomainState) -> String {
                 links.insert((host_id.clone(), id, "negotiated_kx"));
             }
             if let Some(cipher) = &negotiated.cipher {
-                if let Some(sym) = crate::model::symmetric_name(cipher) {
+                if let Some(sym) = symmetric_name(cipher) {
                     let id = format!("cipher:{sym}");
                     node(&mut nodes, &id, sym.clone(), "crypto", "symmetric");
                     links.insert((host_id.clone(), id, "symmetric_cipher"));

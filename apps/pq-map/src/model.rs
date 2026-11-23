@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::net::IpAddr;
 
 use chrono::{DateTime, Local, Utc};
+use pq_core::evidence::collectors::ct::MatchKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -40,13 +41,6 @@ impl Serialize for Origins {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_seq(self.labels())
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum MatchKind {
-    Exact,
-    Wildcard,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,7 +167,7 @@ pub struct Negotiated {
 impl ServedCert {
     pub fn into_certificate(self) -> Certificate {
         let currently_valid =
-            crate::discover::ct::currently_valid(self.not_before, self.not_after, Utc::now());
+            pq_core::evidence::collectors::ct::currently_valid(self.not_before, self.not_after, Utc::now());
         Certificate {
             serial: self.serial,
             in_ct: false,
@@ -278,124 +272,6 @@ pub enum Provenance {
     Fresh,
     Cached { age_secs: u64 },
     Stale { age_secs: Option<u64> },
-}
-
-fn hash_norm(raw: &str) -> String {
-    raw.trim().to_ascii_uppercase().replace('-', "")
-}
-
-pub fn alg_class_of(raw: &str) -> String {
-    let lower = raw.trim().to_ascii_lowercase();
-    if lower.contains("ed25519") {
-        "Ed25519".to_string()
-    } else if lower.contains("ed448") {
-        "Ed448".to_string()
-    } else if lower.starts_with("ml-dsa") || lower.contains("mldsa") {
-        raw.trim().to_string()
-    } else if lower.contains("ecdsa") || lower.contains("ecpublickey") || lower == "ec" {
-        "ECDSA".to_string()
-    } else if lower.contains("rsa") {
-        "RSA".to_string()
-    } else {
-        raw.trim().to_string()
-    }
-}
-
-pub fn curve_from_key_size(size: i64) -> Option<&'static str> {
-    match size {
-        256 => Some("P256"),
-        384 => Some("P384"),
-        521 => Some("P521"),
-        _ => None,
-    }
-}
-
-pub fn cert_key_name(
-    alg: Option<&str>,
-    key_size: Option<i64>,
-    curve: Option<&str>,
-) -> Option<String> {
-    let class = alg_class_of(alg?);
-    if class == "ECDSA" {
-        let bits = key_size.or_else(|| {
-            curve.and_then(|c| c.trim().trim_start_matches(['P', 'p', '-']).parse().ok())
-        });
-        return Some(match bits {
-            Some(b) => format!("EC-{b}"),
-            None => "EC".to_string(),
-        });
-    }
-    Some(match key_size {
-        Some(b) => format!("{class}-{b}"),
-        None => class,
-    })
-}
-
-pub fn cert_signature_name(class: &str, hash: Option<&str>, curve: Option<&str>) -> Option<String> {
-    let class = alg_class_of(class);
-    match class.as_str() {
-        "RSA" => Some(match hash.map(hash_norm) {
-            Some(h) => format!("RSA-{h}"),
-            None => "RSA".to_string(),
-        }),
-        "ECDSA" => Some(match curve {
-            Some(c) => format!("ECDSA-{c}"),
-            None => "ECDSA".to_string(),
-        }),
-        other => Some(other.to_string()),
-    }
-}
-
-pub fn cert_signature_from_db(
-    key_algorithm: Option<&str>,
-    key_size: Option<i64>,
-    sig_key_algorithm: Option<&str>,
-    sig_hash_algorithm: Option<&str>,
-) -> Option<String> {
-    let class = sig_key_algorithm.or(key_algorithm)?;
-    let curve = if alg_class_of(class) == "ECDSA" {
-        key_size.and_then(curve_from_key_size)
-    } else {
-        None
-    };
-    cert_signature_name(class, sig_hash_algorithm, curve)
-}
-
-pub fn port_service(port: u16) -> &'static str {
-    match port {
-        25 | 587 => "SMTP",
-        465 => "SMTPS",
-        993 => "IMAPS",
-        995 => "POP3S",
-        636 => "LDAPS",
-        5061 => "SIPS",
-        8883 => "MQTTS",
-        5222 => "XMPP",
-        5223 => "XMPPS",
-        _ => "TLS",
-    }
-}
-
-pub fn symmetric_name(cipher: &str) -> Option<String> {
-    let upper = cipher.to_ascii_uppercase();
-    if upper.contains("CHACHA20") {
-        return Some("CHACHA20-POLY1305".to_string());
-    }
-    let bits = if upper.contains("AES_128") {
-        "AES128"
-    } else if upper.contains("AES_256") {
-        "AES256"
-    } else {
-        return None;
-    };
-    let mode = if upper.contains("GCM") {
-        "GCM"
-    } else if upper.contains("CBC") {
-        "CBC"
-    } else {
-        return None;
-    };
-    Some(format!("{bits}-{mode}"))
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize)]
@@ -768,110 +644,6 @@ pub fn fixture() -> DomainState {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn cert_signature_names_are_canonical() {
-        assert_eq!(
-            cert_signature_from_db(Some("RSA"), Some(2048), Some("RSA"), Some("SHA-256")),
-            Some("RSA-SHA256".to_string())
-        );
-        assert_eq!(
-            cert_signature_from_db(Some("EC"), Some(256), Some("ECDSA"), Some("SHA-256")),
-            Some("ECDSA-P256".to_string())
-        );
-        assert_eq!(
-            cert_signature_from_db(Some("EC"), Some(384), Some("ECDSA"), Some("SHA-384")),
-            Some("ECDSA-P384".to_string())
-        );
-        assert_eq!(
-            cert_signature_name("rsaEncryption", Some("sha256"), None),
-            Some("RSA-SHA256".to_string())
-        );
-        assert_eq!(
-            cert_signature_name("id-ecPublicKey", Some("ecdsa-with-SHA384"), Some("P384")),
-            Some("ECDSA-P384".to_string())
-        );
-        assert_eq!(
-            cert_signature_name("Ed25519", None, None),
-            Some("Ed25519".to_string())
-        );
-        assert_eq!(
-            cert_signature_name("ML-DSA-65", None, None),
-            Some("ML-DSA-65".to_string())
-        );
-        assert_eq!(
-            cert_signature_name("1.2.3.4.5", None, None),
-            Some("1.2.3.4.5".to_string())
-        );
-        assert_eq!(cert_signature_from_db(None, None, None, None), None);
-    }
-
-    #[test]
-    fn curve_from_key_size_maps_nist_curves() {
-        assert_eq!(curve_from_key_size(256), Some("P256"));
-        assert_eq!(curve_from_key_size(384), Some("P384"));
-        assert_eq!(curve_from_key_size(521), Some("P521"));
-        assert_eq!(curve_from_key_size(2048), None);
-        assert_eq!(curve_from_key_size(512), None);
-    }
-
-    #[test]
-    fn cert_key_names_are_canonical() {
-        assert_eq!(
-            cert_key_name(Some("RSA"), Some(2048), None),
-            Some("RSA-2048".to_string())
-        );
-        assert_eq!(
-            cert_key_name(Some("EC"), Some(256), None),
-            Some("EC-256".to_string())
-        );
-        assert_eq!(
-            cert_key_name(Some("EC"), Some(384), None),
-            Some("EC-384".to_string())
-        );
-        assert_eq!(
-            cert_key_name(Some("ECDSA"), None, Some("P256")),
-            Some("EC-256".to_string())
-        );
-        assert_eq!(
-            cert_key_name(Some("id-ecPublicKey"), None, Some("P521")),
-            Some("EC-521".to_string())
-        );
-        assert_eq!(
-            cert_key_name(Some("RSA"), None, None),
-            Some("RSA".to_string())
-        );
-        assert_eq!(
-            cert_key_name(Some("Ed25519"), None, None),
-            Some("Ed25519".to_string())
-        );
-        assert_eq!(cert_key_name(None, None, None), None);
-    }
-
-    #[test]
-    fn symmetric_names_from_suite_names() {
-        assert_eq!(
-            symmetric_name("TLS13_AES_256_GCM_SHA384"),
-            Some("AES256-GCM".to_string())
-        );
-        assert_eq!(
-            symmetric_name("TLS_AES_128_GCM_SHA256"),
-            Some("AES128-GCM".to_string())
-        );
-        assert_eq!(
-            symmetric_name("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"),
-            Some("AES128-GCM".to_string())
-        );
-        assert_eq!(
-            symmetric_name("TLS13_CHACHA20_POLY1305_SHA256"),
-            Some("CHACHA20-POLY1305".to_string())
-        );
-        assert_eq!(
-            symmetric_name("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384"),
-            Some("AES256-CBC".to_string())
-        );
-        assert_eq!(symmetric_name("TLS_UNKNOWN"), None);
-    }
 
     #[test]
     fn fixture_facts_are_consistent() {

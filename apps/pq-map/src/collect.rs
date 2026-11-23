@@ -10,6 +10,8 @@ use crate::model::{
     CtStats, DnsRef, DnsStatus, DomainState, Endpoint, Host, Origins, PortScan, ProbeStatus,
     ScanState,
 };
+use pq_core::evidence::collectors::ct::{future_valid, is_wildcard};
+use pq_core::evidence::collectors::ports::presets::{PortKind, PORT_CAP, ports_for_host};
 
 const TLS_PORT: u16 = 443;
 
@@ -46,7 +48,7 @@ pub async fn collect(
     let mut hosts: BTreeMap<String, Host> = BTreeMap::new();
     for cert in certs.values().filter(|c| c.currently_valid) {
         for name in &cert.identities {
-            if !ct::is_wildcard(name) {
+            if !is_wildcard(name) {
                 let host = hosts.entry(name.clone()).or_default();
                 host.name = name.clone();
                 host.origins.insert(Origins::CT);
@@ -187,14 +189,12 @@ pub async fn collect(
                 async move {
                     let _ = ip;
                     let is_mx = mx_targets.contains(&name);
-                    let ports: Vec<(u16, crate::probe::sweep::PortKind)> = match explicit_ports {
-                        list if list.is_empty() => {
-                            crate::probe::sweep::ports_for_host(&name, &cfg.probe_ports, is_mx)
-                        }
+                    let ports: Vec<(u16, PortKind)> = match explicit_ports {
+                        list if list.is_empty() => ports_for_host(&name, &cfg.probe_ports, is_mx),
                         list => list
                             .iter()
-                            .take(crate::probe::sweep::PORT_CAP)
-                            .map(|p| (*p, crate::probe::sweep::PortKind::DirectTls))
+                            .take(PORT_CAP)
+                            .map(|p| (*p, PortKind::DirectTls))
                             .collect(),
                     };
                     let port_list: Vec<u16> = ports.iter().map(|(p, _)| *p).collect();
@@ -368,7 +368,7 @@ fn ct_stats(certs: &BTreeMap<String, crate::model::Certificate>) -> CtStats {
     for cert in certs.values() {
         if cert.currently_valid {
             stats.valid += 1;
-        } else if ct::future_valid(cert.not_before, now) {
+        } else if future_valid(cert.not_before, now) {
             stats.future += 1;
         }
     }
@@ -379,6 +379,7 @@ fn ct_stats(certs: &BTreeMap<String, crate::model::Certificate>) -> CtStats {
 mod tests {
     use super::*;
     use crate::model::Certificate;
+    use pq_core::evidence::collectors::ct::currently_valid;
 
     fn cert(serial: &str, nb: &str, na: &str) -> Certificate {
         let parse = |s: &str| {
@@ -391,7 +392,7 @@ mod tests {
             serial: serial.to_string(),
             in_ct: true,
             served_live: false,
-            currently_valid: ct::currently_valid(nb, na, Utc::now()),
+            currently_valid: currently_valid(nb, na, Utc::now()),
             ct_ids: vec![1],
             common_name: None,
             identities: vec![],
