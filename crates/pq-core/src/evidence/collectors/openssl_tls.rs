@@ -40,7 +40,10 @@ pub fn connect(
 /// TLS over an already-connected stream, e.g. one an app upgraded via a
 /// plaintext protocol handshake (STARTTLS) first. Read/write timeouts are
 /// the caller's to set on the stream.
-pub fn connect_over_stream(host: &str, stream: std::net::TcpStream) -> Result<TlsSessionFacts, String> {
+pub fn connect_over_stream(
+    host: &str,
+    stream: std::net::TcpStream,
+) -> Result<TlsSessionFacts, String> {
     use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
 
     let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| e.to_string())?;
@@ -57,7 +60,9 @@ pub fn connect_over_stream(host: &str, stream: std::net::TcpStream) -> Result<Tl
     config.set_use_server_name_indication(true);
     config.set_verify_hostname(false);
 
-    let tls = config.connect(host, stream).map_err(|e| format!("tls: {e}"))?;
+    let tls = config
+        .connect(host, stream)
+        .map_err(|e| format!("tls: {e}"))?;
     let ssl = tls.ssl();
 
     // Client-side peer chain includes the leaf.

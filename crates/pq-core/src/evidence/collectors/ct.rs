@@ -419,13 +419,31 @@ mod tests {
 
     #[test]
     fn ctdate_appends_zone_when_missing() {
-        assert_eq!(ctdate("2014-04-23T12:16:09").unwrap(), utc("2014-04-23T12:16:09Z"));
-        assert_eq!(ctdate("2014-04-23 12:16:09").unwrap(), utc("2014-04-23T12:16:09Z"));
+        assert_eq!(
+            ctdate("2014-04-23T12:16:09").unwrap(),
+            utc("2014-04-23T12:16:09Z")
+        );
+        assert_eq!(
+            ctdate("2014-04-23 12:16:09").unwrap(),
+            utc("2014-04-23T12:16:09Z")
+        );
         // certwatch DB ::text shape: naive, no zone suffix.
-        assert_eq!(ctdate("2026-05-27 00:00:00").unwrap(), utc("2026-05-27T00:00:00Z"));
-        assert_eq!(ctdate("2014-04-23T12:16:09Z").unwrap(), utc("2014-04-23T12:16:09Z"));
-        assert_eq!(ctdate("2014-04-23T12:16:09+02:00").unwrap(), utc("2014-04-23T10:16:09Z"));
-        assert_eq!(ctdate("2014-04-23T12:16:09+0200").unwrap(), utc("2014-04-23T10:16:09Z"));
+        assert_eq!(
+            ctdate("2026-05-27 00:00:00").unwrap(),
+            utc("2026-05-27T00:00:00Z")
+        );
+        assert_eq!(
+            ctdate("2014-04-23T12:16:09Z").unwrap(),
+            utc("2014-04-23T12:16:09Z")
+        );
+        assert_eq!(
+            ctdate("2014-04-23T12:16:09+02:00").unwrap(),
+            utc("2014-04-23T10:16:09Z")
+        );
+        assert_eq!(
+            ctdate("2014-04-23T12:16:09+0200").unwrap(),
+            utc("2014-04-23T10:16:09Z")
+        );
         assert!(ctdate("").is_none());
         assert!(ctdate("not a date").is_none());
     }
@@ -443,12 +461,18 @@ mod tests {
     fn coverage_follows_rfc_6125_single_label() {
         let idents = vec!["example.com".to_string(), "*.example.com".to_string()];
         assert_eq!(coverage(&idents, "example.com"), Some(MatchKind::Exact));
-        assert_eq!(coverage(&idents, "www.example.com"), Some(MatchKind::Wildcard));
+        assert_eq!(
+            coverage(&idents, "www.example.com"),
+            Some(MatchKind::Wildcard)
+        );
         assert_eq!(coverage(&idents, "a.b.example.com"), None);
         assert_eq!(coverage(&idents, "other.pl"), None);
 
         let deep = vec!["*.a.example.com".to_string()];
-        assert_eq!(coverage(&deep, "x.a.example.com"), Some(MatchKind::Wildcard));
+        assert_eq!(
+            coverage(&deep, "x.a.example.com"),
+            Some(MatchKind::Wildcard)
+        );
         assert_eq!(coverage(&deep, "a.example.com"), None);
         assert_eq!(coverage(&deep, "x.y.a.example.com"), None);
     }

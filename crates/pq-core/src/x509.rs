@@ -263,11 +263,27 @@ mod tests {
 
     #[test]
     fn cert_signature_names_are_canonical() {
-        assert_eq!(cert_signature_name("rsaEncryption", Some("sha256"), None).as_deref(), Some("RSA-SHA256"));
-        assert_eq!(cert_signature_name("id-ecPublicKey", Some("ecdsa-with-SHA384"), Some("P384")).as_deref(), Some("ECDSA-P384"));
-        assert_eq!(cert_signature_name("Ed25519", None, None).as_deref(), Some("Ed25519"));
-        assert_eq!(cert_signature_name("ML-DSA-65", None, None).as_deref(), Some("ML-DSA-65"));
-        assert_eq!(cert_signature_name("1.2.3.4.5", None, None).as_deref(), Some("1.2.3.4.5"));
+        assert_eq!(
+            cert_signature_name("rsaEncryption", Some("sha256"), None).as_deref(),
+            Some("RSA-SHA256")
+        );
+        assert_eq!(
+            cert_signature_name("id-ecPublicKey", Some("ecdsa-with-SHA384"), Some("P384"))
+                .as_deref(),
+            Some("ECDSA-P384")
+        );
+        assert_eq!(
+            cert_signature_name("Ed25519", None, None).as_deref(),
+            Some("Ed25519")
+        );
+        assert_eq!(
+            cert_signature_name("ML-DSA-65", None, None).as_deref(),
+            Some("ML-DSA-65")
+        );
+        assert_eq!(
+            cert_signature_name("1.2.3.4.5", None, None).as_deref(),
+            Some("1.2.3.4.5")
+        );
     }
 
     #[test]
@@ -281,13 +297,34 @@ mod tests {
 
     #[test]
     fn cert_key_names_are_canonical() {
-        assert_eq!(cert_key_name(Some("RSA"), Some(2048), None), Some("RSA-2048".to_string()));
-        assert_eq!(cert_key_name(Some("EC"), Some(256), None), Some("EC-256".to_string()));
-        assert_eq!(cert_key_name(Some("EC"), Some(384), None), Some("EC-384".to_string()));
-        assert_eq!(cert_key_name(Some("ECDSA"), None, Some("P256")), Some("EC-256".to_string()));
-        assert_eq!(cert_key_name(Some("id-ecPublicKey"), None, Some("P521")), Some("EC-521".to_string()));
-        assert_eq!(cert_key_name(Some("RSA"), None, None), Some("RSA".to_string()));
-        assert_eq!(cert_key_name(Some("Ed25519"), None, None), Some("Ed25519".to_string()));
+        assert_eq!(
+            cert_key_name(Some("RSA"), Some(2048), None),
+            Some("RSA-2048".to_string())
+        );
+        assert_eq!(
+            cert_key_name(Some("EC"), Some(256), None),
+            Some("EC-256".to_string())
+        );
+        assert_eq!(
+            cert_key_name(Some("EC"), Some(384), None),
+            Some("EC-384".to_string())
+        );
+        assert_eq!(
+            cert_key_name(Some("ECDSA"), None, Some("P256")),
+            Some("EC-256".to_string())
+        );
+        assert_eq!(
+            cert_key_name(Some("id-ecPublicKey"), None, Some("P521")),
+            Some("EC-521".to_string())
+        );
+        assert_eq!(
+            cert_key_name(Some("RSA"), None, None),
+            Some("RSA".to_string())
+        );
+        assert_eq!(
+            cert_key_name(Some("Ed25519"), None, None),
+            Some("Ed25519".to_string())
+        );
         assert_eq!(cert_key_name(None, None, None), None);
     }
 
@@ -302,11 +339,26 @@ mod tests {
 
     #[test]
     fn symmetric_names_from_suite_names() {
-        assert_eq!(symmetric_name("TLS13_AES_256_GCM_SHA384").as_deref(), Some("AES256-GCM"));
-        assert_eq!(symmetric_name("TLS_AES_128_GCM_SHA256").as_deref(), Some("AES128-GCM"));
-        assert_eq!(symmetric_name("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256").as_deref(), Some("AES128-GCM"));
-        assert_eq!(symmetric_name("TLS13_CHACHA20_POLY1305_SHA256").as_deref(), Some("CHACHA20-POLY1305"));
-        assert_eq!(symmetric_name("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384").as_deref(), Some("AES256-CBC"));
+        assert_eq!(
+            symmetric_name("TLS13_AES_256_GCM_SHA384").as_deref(),
+            Some("AES256-GCM")
+        );
+        assert_eq!(
+            symmetric_name("TLS_AES_128_GCM_SHA256").as_deref(),
+            Some("AES128-GCM")
+        );
+        assert_eq!(
+            symmetric_name("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256").as_deref(),
+            Some("AES128-GCM")
+        );
+        assert_eq!(
+            symmetric_name("TLS13_CHACHA20_POLY1305_SHA256").as_deref(),
+            Some("CHACHA20-POLY1305")
+        );
+        assert_eq!(
+            symmetric_name("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384").as_deref(),
+            Some("AES256-CBC")
+        );
         assert_eq!(symmetric_name("TLS_UNKNOWN"), None);
     }
 }

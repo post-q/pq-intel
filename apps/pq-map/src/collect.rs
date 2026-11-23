@@ -11,7 +11,7 @@ use crate::model::{
     ScanState,
 };
 use pq_core::evidence::collectors::ct::{future_valid, is_wildcard};
-use pq_core::evidence::collectors::ports::presets::{PortKind, PORT_CAP, ports_for_host};
+use pq_core::evidence::collectors::ports::presets::{PORT_CAP, PortKind, ports_for_host};
 
 const TLS_PORT: u16 = 443;
 
@@ -210,9 +210,12 @@ pub async fn collect(
                     let _ = ip;
                     let is_mx = mx_targets.contains(&name);
                     let ports: Vec<(u16, PortKind)> = match explicit_ports {
-                        list if list.is_empty() => {
-                            ports_for_host(&name, port_policy.as_deref().expect("loaded for family sweeps"), &[], is_mx)
-                        }
+                        list if list.is_empty() => ports_for_host(
+                            &name,
+                            port_policy.as_deref().expect("loaded for family sweeps"),
+                            &[],
+                            is_mx,
+                        ),
                         list => list
                             .iter()
                             .take(PORT_CAP)

@@ -210,10 +210,38 @@ mod tests {
     #[test]
     fn certificates_dedups_by_serial_and_collects_ids() {
         let rows = vec![
-            r(2, "www.example.com", "www.example.com\nexample.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "0AA11"),
-            r(1, "www.example.com", "www.example.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "AA11"),
-            r(3, "future", "future.example.com", "2027-06-01T00:00:00", "2028-01-01T00:00:00", "BB22"),
-            r(4, "expired", "expired.example.com", "2020-01-01T00:00:00", "2021-01-01T00:00:00", "CC33"),
+            r(
+                2,
+                "www.example.com",
+                "www.example.com\nexample.com",
+                "2026-01-01T00:00:00",
+                "2027-01-01T00:00:00",
+                "0AA11",
+            ),
+            r(
+                1,
+                "www.example.com",
+                "www.example.com",
+                "2026-01-01T00:00:00",
+                "2027-01-01T00:00:00",
+                "AA11",
+            ),
+            r(
+                3,
+                "future",
+                "future.example.com",
+                "2027-06-01T00:00:00",
+                "2028-01-01T00:00:00",
+                "BB22",
+            ),
+            r(
+                4,
+                "expired",
+                "expired.example.com",
+                "2020-01-01T00:00:00",
+                "2021-01-01T00:00:00",
+                "CC33",
+            ),
         ];
         let now = utc("2026-09-21T12:00:00Z");
         let certs = certificates(&rows, now);
@@ -308,8 +336,22 @@ mod tests {
     fn cert_refs_exact_and_wildcard() {
         let now = utc("2026-09-21T12:00:00Z");
         let rows = vec![
-            r(1, "www.example.com", "www.example.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "AA11"),
-            r(2, "*.example.com", "*.example.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "BB22"),
+            r(
+                1,
+                "www.example.com",
+                "www.example.com",
+                "2026-01-01T00:00:00",
+                "2027-01-01T00:00:00",
+                "AA11",
+            ),
+            r(
+                2,
+                "*.example.com",
+                "*.example.com",
+                "2026-01-01T00:00:00",
+                "2027-01-01T00:00:00",
+                "BB22",
+            ),
         ];
         let certs = certificates(&rows, now);
         let refs = cert_refs(&certs, "vpn.example.com");

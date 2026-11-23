@@ -151,8 +151,11 @@ pub struct Negotiated {
 
 impl ServedCert {
     pub fn into_certificate(self) -> Certificate {
-        let currently_valid =
-            pq_core::evidence::collectors::ct::currently_valid(self.not_before, self.not_after, Utc::now());
+        let currently_valid = pq_core::evidence::collectors::ct::currently_valid(
+            self.not_before,
+            self.not_after,
+            Utc::now(),
+        );
         Certificate {
             serial: self.serial,
             in_ct: false,

@@ -205,7 +205,6 @@ fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -274,8 +274,8 @@ pub mod presets {
         /// Parse a policy file (see port-policy.yml at the repo root for
         /// the format).
         pub fn from_yaml(text: &str) -> Result<Self, String> {
-            let map: serde_yaml::Mapping = serde_yaml::from_str(text)
-                .map_err(|e| format!("port policy: {e}"))?;
+            let map: serde_yaml::Mapping =
+                serde_yaml::from_str(text).map_err(|e| format!("port policy: {e}"))?;
             let mut families = Vec::new();
             for (key, value) in map {
                 let name = key
@@ -288,7 +288,10 @@ pub mod presets {
                     .ports
                     .into_iter()
                     .map(|raw| match raw {
-                        PortSpecRaw::Plain(port) => PortSpec { port, starttls: false },
+                        PortSpecRaw::Plain(port) => PortSpec {
+                            port,
+                            starttls: false,
+                        },
                         PortSpecRaw::Full { port, starttls } => PortSpec { port, starttls },
                     })
                     .collect();
@@ -343,19 +346,12 @@ pub mod presets {
                 .collect();
         }
         let label = name.split('.').next().unwrap_or("").to_ascii_lowercase();
-        let match_label: std::borrow::Cow<str> = if is_mx {
-            "mx".into()
-        } else {
-            label.into()
-        };
+        let match_label: std::borrow::Cow<str> = if is_mx { "mx".into() } else { label.into() };
         let (_, _, ports) = policy
             .families
             .iter()
             .find(|(_, prefixes, _)| {
-                prefixes.is_empty()
-                    || prefixes
-                        .iter()
-                        .any(|p| match_label.starts_with(p.as_str()))
+                prefixes.is_empty() || prefixes.iter().any(|p| match_label.starts_with(p.as_str()))
             })
             .expect("validated: a fallback family exists");
         ports
@@ -445,7 +441,10 @@ default:
             assert_eq!(mail.len(), 4);
 
             let xmpp = ports_for_host("conference.examplex.com", &policy, &[], false);
-            assert_eq!(xmpp.iter().map(|p| p.0).collect::<Vec<_>>(), vec![5222, 5223]);
+            assert_eq!(
+                xmpp.iter().map(|p| p.0).collect::<Vec<_>>(),
+                vec![5222, 5223]
+            );
 
             let web = ports_for_host("vpn.example.pl", &policy, &[], false);
             assert_eq!(
@@ -479,10 +478,19 @@ default:
         fn port_cap_holds_for_every_family() {
             let policy = reference_policy();
             for name in [
-                "mx.a.pl", "mail.a.pl", "pop.a.pl", "sip.a.pl", "ldap.a.pl", "mqtt.a.pl",
-                "xmpp.a.pl", "web.a.pl",
+                "mx.a.pl",
+                "mail.a.pl",
+                "pop.a.pl",
+                "sip.a.pl",
+                "ldap.a.pl",
+                "mqtt.a.pl",
+                "xmpp.a.pl",
+                "web.a.pl",
             ] {
-                assert!(ports_for_host(name, &policy, &[], false).len() <= PORT_CAP, "{name}");
+                assert!(
+                    ports_for_host(name, &policy, &[], false).len() <= PORT_CAP,
+                    "{name}"
+                );
             }
         }
 
@@ -495,7 +503,10 @@ default:
             // Fallback not last.
             assert!(PortPolicy::from_yaml("a:\n  ports: [25]\ndefault:\n  ports: [80]\nsmtp:\n  prefixes: [mx]\n  ports: [465]\n").is_err());
             // Bare integers are DirectTls; objects can be StartTls.
-            let p = PortPolicy::from_yaml("default:\n  ports:\n    - 443\n    - { port: 587, starttls: true }\n").unwrap();
+            let p = PortPolicy::from_yaml(
+                "default:\n  ports:\n    - 443\n    - { port: 587, starttls: true }\n",
+            )
+            .unwrap();
             let ports = ports_for_host("x.example", &p, &[], false);
             assert_eq!(ports.len(), 2);
             assert!(matches!(ports[0].1, PortKind::DirectTls));
