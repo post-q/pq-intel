@@ -162,14 +162,15 @@ fn canned_evidence(
 
 /// Serializes the env-setting tests: `std::env::set_var` is process-global
 /// and unsynchronized; both tests set the same values but must not race.
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+/// Async-aware lock so the guard legitimately spans the test's awaits.
+async fn env_lock() -> tokio::sync::MutexGuard<'static, ()> {
+    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    ENV_LOCK.lock().await
 }
 
 #[tokio::test]
 async fn second_run_performs_zero_network_requests() {
-    let _env = env_lock();
+    let _env = env_lock().await;
     // The certwatch DB is the live CT primary; point it at a closed
     // port with one attempt so its attempts fail fast (recorded as
     // failure observations, then the canned HTTP fallback drives the
@@ -258,7 +259,7 @@ async fn second_run_performs_zero_network_requests() {
 
 #[tokio::test]
 async fn ports_sweep_runs_the_shared_collector() {
-    let _env = env_lock();
+    let _env = env_lock().await;
     // Identical env values as the test above (env is process-global).
     unsafe {
         std::env::set_var("CT_DB_HOST", "127.0.0.1");
