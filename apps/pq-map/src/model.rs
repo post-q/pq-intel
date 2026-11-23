@@ -3,6 +3,7 @@ use std::net::IpAddr;
 
 use chrono::{DateTime, Local, Utc};
 use pq_core::evidence::collectors::ct::MatchKind;
+use pq_core::evidence::collectors::ctdb::ChainEntry;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -54,22 +55,6 @@ pub enum ProbeStatus {
     TlsHandshakeFailed,
     ConnectedNoCert,
     Unknown { reason: String },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainEntry {
-    pub depth: u32,
-    pub certificate_id: u64,
-    pub common_name: Option<String>,
-    pub ski: Option<String>,
-    pub aki: Option<String>,
-    pub not_before: Option<DateTime<Utc>>,
-    pub not_after: Option<DateTime<Utc>>,
-    pub key_algorithm: Option<String>,
-    pub key_size: Option<i64>,
-    pub signature_key_algorithm: Option<String>,
-    pub signature_hash_algorithm: Option<String>,
-    pub issuer_ca_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
