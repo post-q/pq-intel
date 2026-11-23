@@ -26,6 +26,8 @@ pub struct Options {
 pub enum Error {
     #[error(transparent)]
     Ct(#[from] fetch::Error),
+    #[error("ports sweep: {0}")]
+    Policy(String),
     #[error("task join failed")]
     Join,
 }
@@ -136,6 +138,23 @@ pub async fn collect(
     if opts.probe
         && let Some(explicit_ports) = &opts.ports
     {
+        // The sweep policy (which ports per host family) is data, not
+        // code: a PORT_POLICY yaml, required unless an explicit port
+        // list is given.
+        let port_policy = if explicit_ports.is_empty() {
+            let path = cfg.port_policy.as_ref().ok_or_else(|| {
+                Error::Policy(
+                    "set PORT_POLICY to a policy file (see port-policy.yml at the pq-intel root)"
+                        .into(),
+                )
+            })?;
+            Some(std::sync::Arc::new(
+                pq_core::evidence::collectors::ports::presets::PortPolicy::load(path)
+                    .map_err(Error::Policy)?,
+            ))
+        } else {
+            None
+        };
         let mx_names: Vec<String> = discovery.mx.iter().map(|rec| rec.target.clone()).collect();
 
         let mut targets: Vec<(String, IpAddr)> = resolution
@@ -186,11 +205,14 @@ pub async fn collect(
                 let mx_targets = std::sync::Arc::clone(&mx_targets);
                 let ev = ev.clone();
                 let ports_reader = ports_reader.clone();
+                let port_policy = port_policy.clone();
                 async move {
                     let _ = ip;
                     let is_mx = mx_targets.contains(&name);
                     let ports: Vec<(u16, PortKind)> = match explicit_ports {
-                        list if list.is_empty() => ports_for_host(&name, &cfg.probe_ports, is_mx),
+                        list if list.is_empty() => {
+                            ports_for_host(&name, port_policy.as_deref().expect("loaded for family sweeps"), &[], is_mx)
+                        }
                         list => list
                             .iter()
                             .take(PORT_CAP)
