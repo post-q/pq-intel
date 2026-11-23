@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::time::Duration;
 
 use crate::model::{Negotiated, ServedCert};
@@ -63,24 +63,10 @@ fn attempt_store(
         .data
         .ok_or_else(|| Failure::Unknown("no TLS observation".into()))?;
     let facts = observed.session;
-    let leaf = facts
-        .chain
-        .first()
-        .cloned()
-        .ok_or_else(|| Failure::ClosedNoCert("no certificate served".to_string()))?;
-    let chain_sigs: Vec<String> = facts
-        .chain
-        .iter()
-        .filter_map(|der| sig_alg_from_der(der))
-        .collect();
-    let negotiated = Negotiated {
-        tls_version: Some(facts.protocol_version.clone()),
-        kx_group: Some(facts.kex_group.clone()).filter(|s| !s.is_empty()),
-        cipher: Some(facts.cipher_suite.clone()).filter(|s| !s.is_empty()),
-    };
-    let served = served_cert_from_der(&leaf)
-        .ok_or_else(|| Failure::Unknown("certificate parse failed".to_string()))?;
-    Ok((served_with_chain_sigs(served, chain_sigs), negotiated))
+    if facts.chain.is_empty() {
+        return Err(Failure::ClosedNoCert("no certificate served".to_string()));
+    }
+    served_and_negotiated(facts).map_err(Failure::Unknown)
 }
 
 /// Recorded store failure → probe failure. Connection-level errors map
@@ -104,138 +90,41 @@ fn recorded_to_failure(f: pq_core::evidence::scan::RecordedFailure) -> Failure {
     }
 }
 
-/// Legacy fallback for servers that rustls cannot reach (TLS 1.0/1.1, odd
-/// ciphers): OpenSSL with SECLEVEL=0, verification off — the s_client bar.
-/// No PQ key exchange exists below TLS 1.3, so kx_group stays empty here.
+/// Legacy fallback for servers rustls cannot reach (TLS 1.0/1.1, odd
+/// ciphers): core's OpenSSL legacy transport (`SECLEVEL=0`, verification
+/// off — the s_client bar), producing the same observation definition as
+/// the rustls collection.
 pub fn openssl_attempt(
     host: &str,
     ip: Option<IpAddr>,
     port: u16,
     timeout: Duration,
 ) -> Result<(ServedCert, Negotiated), String> {
-    let addr = match ip {
-        Some(ip) => SocketAddr::from((ip, port)),
-        None => return Err("host unresolved".to_string()),
-    };
-
-    let stream =
-        std::net::TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("tcp: {e}"))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|e| format!("tcp: {e}"))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|e| format!("tcp: {e}"))?;
-    tls_over_stream(host, stream)
+    let facts = pq_core::evidence::collectors::openssl_tls::connect(host, ip, port, timeout)?;
+    served_and_negotiated(facts)
 }
 
-pub fn openssl_starttls_smtp(
-    host: &str,
-    ip: Option<IpAddr>,
-    port: u16,
-    timeout: Duration,
+/// Shared mapping: the one TLS observation definition (core facts) →
+/// probe model, for both the rustls collection and the OpenSSL fallback.
+fn served_and_negotiated(
+    facts: pq_core::evidence::collectors::tls_connector::TlsSessionFacts,
 ) -> Result<(ServedCert, Negotiated), String> {
-    let addr = match ip {
-        Some(ip) => SocketAddr::from((ip, port)),
-        None => return Err("host unresolved".to_string()),
-    };
-
-    let mut stream =
-        std::net::TcpStream::connect_timeout(&addr, timeout).map_err(|e| format!("tcp: {e}"))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|e| format!("tcp: {e}"))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|e| format!("tcp: {e}"))?;
-
-    use std::io::{BufRead, BufReader, Write};
-    let mut reader = BufReader::new(stream.try_clone().map_err(|e| format!("tcp: {e}"))?);
-    let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| format!("smtp: greeting: {e}"))?;
-    if !line.starts_with("220") {
-        return Err(format!("smtp: unexpected greeting: {line}"));
+    if facts.chain.is_empty() {
+        return Err("connected, no certificate".to_string());
     }
-    stream
-        .write_all(b"EHLO pq-map.local\r\n")
-        .map_err(|e| format!("smtp: ehlo: {e}"))?;
-    loop {
-        line.clear();
-        reader
-            .read_line(&mut line)
-            .map_err(|e| format!("smtp: ehlo: {e}"))?;
-        if line.starts_with("250 ") {
-            break;
-        }
-        if !line.starts_with("250-") || line.len() > 512 {
-            return Err(format!("smtp: unexpected ehlo reply: {line}"));
-        }
-    }
-    stream
-        .write_all(b"STARTTLS\r\n")
-        .map_err(|e| format!("smtp: starttls: {e}"))?;
-    line.clear();
-    reader
-        .read_line(&mut line)
-        .map_err(|e| format!("smtp: starttls: {e}"))?;
-    if !line.starts_with("220") {
-        return Err(format!("smtp: starttls refused: {line}"));
-    }
-
-    tls_over_stream(host, stream)
-}
-
-fn tls_over_stream(
-    host: &str,
-    stream: std::net::TcpStream,
-) -> Result<(ServedCert, Negotiated), String> {
-    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode, SslVersion};
-
-    let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| e.to_string())?;
-    builder
-        .set_min_proto_version(Some(SslVersion::TLS1))
-        .map_err(|e| e.to_string())?;
-    builder
-        .set_cipher_list("DEFAULT@SECLEVEL=0")
-        .map_err(|e| e.to_string())?;
-    builder.set_verify(SslVerifyMode::NONE);
-    let connector = builder.build();
-
-    let mut config = connector.configure().map_err(|e| e.to_string())?;
-    config.set_use_server_name_indication(true);
-    config.set_verify_hostname(false);
-
-    let tls = config
-        .connect(host, stream)
-        .map_err(|e| format!("tls: {e}"))?;
-    let ssl = tls.ssl();
-
+    let chain_sigs: Vec<String> = facts
+        .chain
+        .iter()
+        .filter_map(|der| sig_alg_from_der(der))
+        .collect();
     let negotiated = Negotiated {
-        tls_version: Some(ssl.version_str().to_string()),
-        kx_group: None,
-        cipher: ssl.current_cipher().map(|c| c.name().to_string()),
+        tls_version: Some(facts.protocol_version.clone()),
+        kx_group: Some(facts.kex_group.clone()).filter(|s| !s.is_empty()),
+        cipher: Some(facts.cipher_suite.clone()).filter(|s| !s.is_empty()),
     };
-
-    // Client-side peer chain includes the leaf.
-    let chain_sigs: Vec<String> = ssl
-        .peer_cert_chain()
-        .map(|chain| {
-            chain
-                .iter()
-                .filter_map(|cert| cert.to_der().ok())
-                .filter_map(|der| sig_alg_from_der(&der))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let cert = ssl
-        .peer_certificate()
-        .ok_or_else(|| "connected, no certificate".to_string())?;
-    let der = cert.to_der().map_err(|e| e.to_string())?;
+    let leaf = facts.chain.first().cloned().unwrap_or_default();
     let served =
-        served_cert_from_der(&der).ok_or_else(|| "certificate parse failed".to_string())?;
+        served_cert_from_der(&leaf).ok_or_else(|| "certificate parse failed".to_string())?;
     Ok((served_with_chain_sigs(served, chain_sigs), negotiated))
 }
 

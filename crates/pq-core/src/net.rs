@@ -56,9 +56,25 @@ pub fn reverse_name(ip: std::net::IpAddr) -> String {
     }
 }
 
+/// Host-boundary check: `host` is `domain` itself or a subdomain of it
+/// (never a mere suffix — `notexample.com` is not in `example.com`).
+pub fn in_domain(host: &str, domain: &str) -> bool {
+    host == domain || host.ends_with(&format!(".{domain}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn in_domain_boundaries() {
+        assert!(in_domain("example.com", "example.com"));
+        assert!(in_domain("www.example.com", "example.com"));
+        assert!(in_domain("a.b.example.com", "example.com"));
+        assert!(!in_domain("notexample.com", "example.com"));
+        assert!(!in_domain("example.com.evil.com", "example.com"));
+        assert!(!in_domain("other.pl", "example.com"));
+    }
 
     #[test]
     fn normalizes_case_trailing_dot_and_wildcard() {

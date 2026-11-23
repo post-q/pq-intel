@@ -10,6 +10,8 @@ pub mod ctdb;
 pub mod dns;
 pub mod dns_transport;
 pub mod http_collector;
+#[cfg(feature = "openssl-tls")]
+pub mod openssl_tls;
 pub mod ports;
 pub mod rdap;
 pub mod ripestat;

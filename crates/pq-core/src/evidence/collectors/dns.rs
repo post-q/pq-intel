@@ -183,6 +183,38 @@ pub fn parse_mx_presentation(p: &str) -> Option<(u16, String)> {
     Some((priority, host))
 }
 
+/// `1 dot.example.com. alpn="h2" ipv4hint=1.2.3.4`
+///   → (1, "dot.example.com", "alpn=\"h2\" ipv4hint=1.2.3.4")
+///
+/// SVCB/HTTPS rdata arrives as hickory's presentation string; the first
+/// two tokens are priority and target, the rest are params.
+pub fn parse_svcb_presentation(p: &str) -> Option<(u16, String, String)> {
+    let mut parts = p.split_whitespace();
+    let priority: u16 = parts.next()?.parse().ok()?;
+    let target = parts.next()?;
+    let target = if target == "." {
+        ".".to_string()
+    } else {
+        target.trim_end_matches('.').to_ascii_lowercase()
+    };
+    Some((priority, target, parts.collect::<Vec<_>>().join(" ")))
+}
+
+/// The well-known SRV service prefixes the discovery sweep covers, with
+/// their display labels.
+pub const SRV_SERVICES: &[(&str, &str)] = &[
+    ("_ldap._tcp", "LDAP"),
+    ("_ldaps._tcp", "LDAPS"),
+    ("_kerberos._tcp", "Kerberos/TCP"),
+    ("_kerberos._udp", "Kerberos/UDP"),
+    ("_sip._tcp", "SIP/TCP"),
+    ("_sip._udp", "SIP/UDP"),
+    ("_sip._tls", "SIP/TLS"),
+    ("_xmpp-client._tcp", "XMPP client"),
+    ("_xmpp-server._tcp", "XMPP server"),
+    ("_matrix-fed._tcp", "Matrix federation"),
+];
+
 /// `1 9 443 sip.example.com.` → (1, 9, 443, "sip.example.com")
 pub fn parse_srv_presentation(p: &str) -> Option<(u16, u16, u16, String)> {
     let mut parts = p.split_whitespace();
@@ -420,5 +452,31 @@ mod tests {
             Some((10, "mail.example.com".into()))
         );
         assert_eq!(parse_mx_presentation("not an mx"), None);
+    }
+
+    #[test]
+    fn svcb_presentation_parses() {
+        assert_eq!(
+            parse_svcb_presentation("1 dot.example.com. alpn=\"h2\" ipv4hint=1.2.3.4"),
+            Some((
+                1,
+                "dot.example.com".into(),
+                "alpn=\"h2\" ipv4hint=1.2.3.4".into()
+            ))
+        );
+        assert_eq!(
+            parse_svcb_presentation("1 ."),
+            Some((1, ".".into(), "".into()))
+        );
+        assert_eq!(parse_svcb_presentation(""), None);
+        assert_eq!(parse_svcb_presentation("x example.com"), None);
+    }
+
+    #[test]
+    fn srv_service_table_has_unique_prefixes() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (prefix, _) in SRV_SERVICES {
+            assert!(seen.insert(*prefix), "duplicate SRV prefix {prefix}");
+        }
     }
 }
