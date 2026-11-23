@@ -7,8 +7,9 @@ evidence store, and the tools that collect through it.
 
 - [`pq-core`](crates/pq-core) — the evidence store and its collectors (DNS
   and DoH, HTTP, TLS, Certificate Transparency, RDAP, RIPEstat, a
-  conservative port sweep); append-only observations with full provenance,
-  content-addressed artifacts, policy-driven cache reuse
+  conservative port sweep — its per-family port table is data, see
+  [port-policy.yml](port-policy.yml)); append-only observations with full
+  provenance, content-addressed artifacts, policy-driven cache reuse
 - [`pq-map`](apps/pq-map) — domain service and cryptography discovery from
   Certificate Transparency and DNS
 - [`pq-pulse`](apps/pq-pulse) — post-quantum TLS key-exchange probe with

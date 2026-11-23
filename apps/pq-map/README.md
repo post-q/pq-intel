@@ -31,6 +31,7 @@ pq-map example.com --graph        # semantic graph JSON (see visualization below
 pq-map example.com --refresh      # force fresh CT + full re-probe
 pq-map example.com --no-probe     # CT/DNS only, no TLS handshakes
 pq-map example.com --ports        # discover other services (smtp/imap/...) on hosts where 443 failed
+pq-map example.com --port-policy my-ports.yml   # sweep policy as data (default: the repo root port-policy.yml)
 ```
 
 Caches in `~/.cache/pq-map/`: CT 30 days, probes 24 hours. DNS resolves every run and invalidates cached probes; failed probes are cached too. `--refresh` bypasses both.
