@@ -2,7 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 
-use crate::model::{ChainEntry, DomainState, Host, ProbeStatus};
+use crate::model::{DomainState, Host, ProbeStatus};
+
+use pq_core::evidence::collectors::ctdb::ChainEntry;
 
 use pq_core::evidence::collectors::ct::MatchKind;
 use pq_core::evidence::collectors::ports::presets::port_service;

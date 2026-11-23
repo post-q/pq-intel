@@ -19,7 +19,7 @@ use crate::config::Config;
 use crate::model::{Certificate, Provenance};
 
 use super::ct;
-use super::ctdb;
+use pq_core::evidence::collectors::ctdb;
 
 /// Map's env-parsed CT knobs, as the core certwatch config.
 fn certwatch_cfg(cfg: &Config) -> CertwatchConfig {
@@ -264,7 +264,7 @@ pub struct ChainCollector {
 
 impl Collector for ChainCollector {
     type Request = ChainRequest;
-    type Output = BTreeMap<u64, Vec<crate::model::ChainEntry>>;
+    type Output = BTreeMap<u64, Vec<ctdb::ChainEntry>>;
 
     fn collect(
         &self,
@@ -312,7 +312,7 @@ impl Collector for ChainCollector {
                 obs.id
             ))
         })?;
-        let chains: BTreeMap<u64, Vec<crate::model::ChainEntry>> =
+        let chains: BTreeMap<u64, Vec<ctdb::ChainEntry>> =
             serde_json::from_slice(&store.read_artifact(artifact)?)?;
         Ok(chains)
     }
