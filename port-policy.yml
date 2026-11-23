@@ -1,6 +1,6 @@
-# Port policy for the ports sweep (pq-map collect --ports, remote collectors
-# with the ports capture). Data, not code: edit this file to change which
-# ports get probed - no rebuild needed.
+# Port policy for the ports sweep (pq-map collect --ports, remote
+# collectors with the ports capture). Data, not code: edit this file to
+# change which ports get probed - no rebuild needed.
 #
 # A host is matched to ONE service: the first entry whose `prefixes`
 # contain the host's first DNS label (prefix match) wins. The last entry
