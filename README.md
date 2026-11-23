@@ -44,9 +44,17 @@ cargo test --all
 ```
 
 Commits follow the Conventional Commits format. CI checks formatting,
-clippy, tests, and commit messages; release binaries are built per tool from
-tool-prefixed version tags (`pq-map-v0.2.3`, `pq-pulse-v0.7.6`). The design
-specification of the store is [`specs/evidence-store-v1.md`](specs/evidence-store-v1.md).
+clippy, tests, and commit messages.
+
+Releases are tag-driven, one crate per tag: `pq-core-v…`, `pq-map-v…`,
+`pq-pulse-v…` (tag must match the crate's `Cargo.toml` version). Every
+tag publishes the crate to [crates.io](https://crates.io) (needs the
+`CARGO_REGISTRY_TOKEN` repo secret); tool tags additionally attach
+release binaries for three targets to a GitHub release. `pq-core` is a
+dependency of both tools, so publish `pq-core` first when its version
+changes — the tools' `pq-core = { version = … }` entries track it. The
+design specification of the store is
+[`specs/evidence-store-v1.md`](specs/evidence-store-v1.md).
 
 ## License
 

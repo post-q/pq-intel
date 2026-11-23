@@ -3,6 +3,7 @@ name: release
 on:
   push:
     tags:
+      - "pq-core-v*"
       - "pq-map-v*"
       - "pq-pulse-v*"
 
@@ -13,7 +14,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tool: ${{ steps.meta.outputs.tool }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify tag matches the crate's Cargo.toml version
+        id: meta
+        run: |
+          tool="${GITHUB_REF_NAME%-v*}"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg tool "$tool" '.packages[] | select(.name == $tool) | .version')"
+          if [ "v${version}" != "${GITHUB_REF_NAME#*-}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match ${tool}'s Cargo.toml version v${version}"
+            exit 1
+          fi
+          echo "tool=$tool" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  # Binary artifacts. The library tag has no binary to ship.
   build:
+    needs: verify
+    if: needs.verify.outputs.tool != 'pq-core'
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +49,8 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
+    env:
+      TOOL: ${{ needs.verify.outputs.tool }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -34,13 +60,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - name: Build the tagged tool
-        run: |
-          tool="${GITHUB_REF_NAME%-v*}"
-          cargo build --release --package "$tool" --target ${{ matrix.target }}
-          echo "TOOL=$tool" >> "$GITHUB_ENV"
+        run: cargo build --release --package "$TOOL" --target ${{ matrix.target }}
       - name: Package
         run: |
-          version="${GITHUB_REF_NAME#*-v}"
+          version="${{ needs.verify.outputs.version }}"
           dir="${TOOL}-v${version}-${{ matrix.target }}"
           mkdir "${dir}"
           cp "target/${{ matrix.target }}/release/${TOOL}" "${dir}/"
@@ -59,24 +82,19 @@ jobs:
             ${{ env.TOOL }}-*.tar.gz.sha256
           if-no-files-found: error
 
+  # GitHub release: changelog, notes, binary artifacts (tool tags only).
   release:
-    needs: build
+    needs: [verify, build]
+    if: needs.verify.outputs.tool != 'pq-core'
     runs-on: ubuntu-latest
+    env:
+      TOOL: ${{ needs.verify.outputs.tool }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - name: Verify tag matches the tool's Cargo.toml version
-        run: |
-          tool="${GITHUB_REF_NAME%-v*}"
-          version="$(cargo metadata --no-deps --format-version 1 | jq -r --arg tool "$tool" '.packages[] | select(.name == $tool) | .version')"
-          if [ "v${version}" != "${GITHUB_REF_NAME#*-}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match ${tool}'s Cargo.toml version v${version}"
-            exit 1
-          fi
-          echo "TOOL=$tool" >> "$GITHUB_ENV"
       - name: Generate changelog
         uses: orhun/git-cliff-action@v4
         with:
@@ -117,3 +135,30 @@ jobs:
             --title "${GITHUB_REF_NAME}" \
             --notes-file RELEASE_NOTES.md \
             dist/${TOOL}-*.tar.gz dist/${TOOL}-*.tar.gz.sha256
+
+  # crates.io: exactly one crate per tag. pq-core must be published
+  # before (or at the same time as) the tools that depend on it; the
+  # retries absorb registry index lag right after a fresh pq-core
+  # publish. Requires the CARGO_REGISTRY_TOKEN repo secret (token must
+  # own pq-map/pq-pulse on the registry).
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      TOOL: ${{ needs.verify.outputs.tool }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Publish ${{ needs.verify.outputs.tool }} to crates.io
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if cargo publish --package "$TOOL"; then
+              echo "$TOOL published to crates.io"
+              exit 0
+            fi
+            echo "::warning::publish attempt ${attempt} failed; retrying after 30s (registry index lag after a fresh pq-core publish)"
+            sleep 30
+          done
+          exit 1

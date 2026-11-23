@@ -1,6 +1,6 @@
 [package]
 name = "pq-pulse"
-version = "0.7.6"
+version = "0.8.0"
 edition = "2024"
 description = "Post-quantum TLS key-exchange probe with CDN/edge/vendor attribution of the endpoint"
 license = "EUPL-1.2"
@@ -22,6 +22,6 @@ thiserror = "2"
 indicatif = "0.17"
 x509-parser = "0.16"
 ipnet = "2"
-pq-core = { path = "../../crates/pq-core" }
+pq-core = { version = "0.8.0", path = "../../crates/pq-core" }
 hickory-proto = "0.24"
 tempfile = "3"

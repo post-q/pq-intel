@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "pq-pulse"
-version = "0.7.6"
+version = "0.8.0"
 dependencies = [
  "chrono",
  "clap",
