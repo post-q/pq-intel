@@ -11,6 +11,7 @@ repository.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 hickory-proto = "0.24"
 rusqlite = { version = "0.32", features = ["bundled"] }
+x509-parser = "0.16"
 rustls = { version = "0.23", features = ["aws-lc-rs", "prefer-post-quantum"] }
 rustls-pki-types = "1"
 serde = { version = "1", features = ["derive"] }

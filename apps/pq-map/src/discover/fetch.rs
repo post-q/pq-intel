@@ -6,7 +6,7 @@ use chrono::Utc;
 use pq_core::evidence::FreshnessRequirement;
 use pq_core::evidence::collector::CollectionError;
 use pq_core::evidence::collector::Collector;
-use pq_core::evidence::collectors::ct::{CtCollector, CtRequest};
+use pq_core::evidence::collectors::ct::{CtCollector, CtRequest, CtShRow};
 use pq_core::evidence::collectors::ctdb::{
     CertwatchConfig, CtdbCollector, CtdbRequest, DbRow, Session,
 };
@@ -154,7 +154,7 @@ fn http_fallback(
             .store
             .read_artifact(artifact)
             .map_err(|_| Error::NoCtData)?;
-        let rows: Vec<ct::CtRow> = serde_json::from_slice(&bytes).map_err(|_| Error::NoCtData)?;
+        let rows: Vec<CtShRow> = serde_json::from_slice(&bytes).map_err(|_| Error::NoCtData)?;
         let certs = ct::certificates(&rows, Utc::now());
         if certs.is_empty() {
             eprintln!("CT: crt.sh returned no certificates for {domain}");
@@ -215,7 +215,7 @@ fn certs_from_stored(
             (!certs.is_empty()).then_some(certs)
         }
         "ct" => {
-            let rows: Vec<ct::CtRow> = serde_json::from_slice(
+            let rows: Vec<CtShRow> = serde_json::from_slice(
                 &ev.store
                     .read_artifact(obs.artifact_by_role("ct_response")?)
                     .ok()?,

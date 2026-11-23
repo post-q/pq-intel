@@ -1,4 +1,3 @@
-pub mod sweep;
 pub mod tls;
 
 use std::io::ErrorKind;

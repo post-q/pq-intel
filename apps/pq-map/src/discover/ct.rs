@@ -1,162 +1,22 @@
+//! Model mapping: core certwatch rows → pq-map's graph model. The
+//! certwatch semantics (timestamp repair, name handling, RFC 6125
+//! coverage, serial normalization, jq-epoch validity) live in
+//! `pq_core::evidence::collectors::ct`; this module only shapes the
+//! presentation model (`crate::model::Certificate`).
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 
-use crate::model::{CertRef, Certificate, MatchKind, cert_signature_from_db};
+use crate::model::{CertRef, Certificate};
 
+use pq_core::evidence::collectors::ct::{
+    CtShRow, coverage, ctdate, currently_valid, future_valid, names, serial_norm,
+};
 use pq_core::evidence::collectors::ctdb::DbRow;
+use pq_core::x509::cert_signature_from_db;
 
-#[derive(Debug, Deserialize)]
-pub struct CtRow {
-    #[serde(default)]
-    pub id: Option<u64>,
-    #[serde(default)]
-    pub common_name: Option<String>,
-    #[serde(default)]
-    pub name_value: Option<String>,
-    #[serde(default)]
-    pub not_before: Option<String>,
-    #[serde(default)]
-    pub not_after: Option<String>,
-    #[serde(default)]
-    pub serial_number: Option<String>,
-}
-
-pub fn parse_rows(body: &str) -> Result<Vec<CtRow>, serde_json::Error> {
-    serde_json::from_str(body)
-}
-
-/// crt.sh timestamps carry no zone ("2014-04-23T12:16:09"); RFC 3339 requires one.
-/// jq's fromdateiso8601 also accepts compact offsets (+0200); chrono needs +02:00.
-pub fn ctdate(raw: &str) -> Option<DateTime<Utc>> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return None;
-    }
-    let with_t = raw.replace(' ', "T");
-    let with_zone = if has_explicit_zone(&with_t) {
-        normalize_zone(with_t)
-    } else {
-        format!("{with_t}Z")
-    };
-    DateTime::parse_from_rfc3339(&with_zone)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-/// +HHMM → +HH:MM so that RFC 3339 parsing succeeds.
-fn normalize_zone(s: String) -> String {
-    let b = s.as_bytes();
-    if b.len() >= 5 {
-        let tail = &b[b.len() - 5..];
-        if (tail[0] == b'+' || tail[0] == b'-') && tail[1..].iter().all(u8::is_ascii_digit) {
-            return format!(
-                "{}{}:{}",
-                &s[..s.len() - 5],
-                &s[s.len() - 5..s.len() - 2],
-                &s[s.len() - 2..]
-            );
-        }
-    }
-    s
-}
-
-fn has_explicit_zone(s: &str) -> bool {
-    let b = s.as_bytes();
-    if b.ends_with(b"Z") || b.ends_with(b"z") {
-        return true;
-    }
-    // +HH:MM (6 bytes) or +HHMM (5 bytes)
-    let check = |len: usize| -> bool {
-        if b.len() < len {
-            return false;
-        }
-        let t = &b[b.len() - len..];
-        if t[0] != b'+' && t[0] != b'-' {
-            return false;
-        }
-        let rest = &t[1..];
-        match len {
-            6 => {
-                rest[0].is_ascii_digit()
-                    && rest[1].is_ascii_digit()
-                    && rest[2] == b':'
-                    && rest[3].is_ascii_digit()
-                    && rest[4].is_ascii_digit()
-            }
-            5 => rest.iter().all(u8::is_ascii_digit),
-            _ => false,
-        }
-    };
-    check(6) || check(5)
-}
-
-pub fn names(name_value: &str) -> Vec<String> {
-    let mut out: Vec<String> = name_value
-        .split('\n')
-        .map(|n| n.trim().to_lowercase())
-        .filter(|n| !n.is_empty())
-        .collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
-pub fn is_wildcard(name: &str) -> bool {
-    name.starts_with("*.")
-}
-
-/// RFC 6125 single-label wildcard: `*.base` covers `x.base` only - not `a.b.base`, not `base`.
-pub fn coverage(identities: &[String], host: &str) -> Option<MatchKind> {
-    if identities.iter().any(|n| n == host) {
-        return Some(MatchKind::Exact);
-    }
-    for n in identities {
-        if let Some(base) = n.strip_prefix("*.") {
-            let host_labels = host.split('.').count();
-            let base_labels = base.split('.').count();
-            if host_labels == base_labels + 1 && host.ends_with(&format!(".{base}")) {
-                return Some(MatchKind::Wildcard);
-            }
-        }
-    }
-    None
-}
-
-fn epoch(dt: Option<DateTime<Utc>>) -> i64 {
-    dt.map_or(0, |d| d.timestamp())
-}
-
-/// Missing dates behave like epoch 0 (crt.sh jq semantics): no `not_after` means not valid.
-pub fn currently_valid(
-    nb: Option<DateTime<Utc>>,
-    na: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-) -> bool {
-    let now = now.timestamp();
-    epoch(nb) <= now && epoch(na) >= now
-}
-
-pub fn future_valid(nb: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
-    epoch(nb) > now.timestamp()
-}
-
-pub fn serial_norm(raw: &str) -> String {
-    let hex: String = raw
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .map(|c| c.to_ascii_lowercase())
-        .collect();
-    let stripped = hex.trim_start_matches('0');
-    if stripped.is_empty() {
-        "0".to_string()
-    } else {
-        stripped.to_string()
-    }
-}
-
-pub fn certificates(rows: &[CtRow], now: DateTime<Utc>) -> BTreeMap<String, Certificate> {
+pub fn certificates(rows: &[CtShRow], now: DateTime<Utc>) -> BTreeMap<String, Certificate> {
     let mut certs: BTreeMap<String, Certificate> = BTreeMap::new();
     for row in rows {
         let nb = row.not_before.as_deref().and_then(ctdate);
@@ -195,6 +55,7 @@ pub fn certificates(rows: &[CtRow], now: DateTime<Utc>) -> BTreeMap<String, Cert
             chain: Vec::new(),
         });
         if let Some(id) = row.id {
+            let id = id as u64;
             if !entry.ct_ids.contains(&id) {
                 entry.ct_ids.push(id);
             }
@@ -310,132 +171,49 @@ pub fn cert_refs(certs: &BTreeMap<String, Certificate>, host: &str) -> Vec<CertR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pq_core::evidence::collectors::ct::MatchKind;
 
     fn utc(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
 
-    #[test]
-    fn ctdate_appends_zone_when_missing() {
-        assert_eq!(
-            ctdate("2014-04-23T12:16:09").unwrap(),
-            utc("2014-04-23T12:16:09Z")
-        );
-        assert_eq!(
-            ctdate("2014-04-23 12:16:09").unwrap(),
-            utc("2014-04-23T12:16:09Z")
-        );
-        // certwatch DB ::text shape: naive, no zone suffix.
-        assert_eq!(
-            ctdate("2026-05-27 00:00:00").unwrap(),
-            utc("2026-05-27T00:00:00Z")
-        );
-        assert_eq!(
-            ctdate("2014-04-23T12:16:09Z").unwrap(),
-            utc("2014-04-23T12:16:09Z")
-        );
-        assert_eq!(
-            ctdate("2014-04-23T12:16:09+02:00").unwrap(),
-            utc("2014-04-23T10:16:09Z")
-        );
-        assert_eq!(
-            ctdate("2014-04-23T12:16:09+0200").unwrap(),
-            utc("2014-04-23T10:16:09Z")
-        );
-        assert!(ctdate("").is_none());
-        assert!(ctdate("not a date").is_none());
-    }
-
-    #[test]
-    fn names_splits_lowers_and_dedups() {
-        assert_eq!(
-            names("WWW.Example.COM\r\nmail.example.com\n\nmail.example.com"),
-            vec!["mail.example.com", "www.example.com"]
-        );
-        assert_eq!(names(""), Vec::<String>::new());
-    }
-
-    #[test]
-    fn coverage_follows_rfc_6125_single_label() {
-        let idents = vec!["example.com".to_string(), "*.example.com".to_string()];
-        assert_eq!(coverage(&idents, "example.com"), Some(MatchKind::Exact));
-        assert_eq!(
-            coverage(&idents, "www.example.com"),
-            Some(MatchKind::Wildcard)
-        );
-        assert_eq!(coverage(&idents, "a.b.example.com"), None);
-        assert_eq!(coverage(&idents, "other.pl"), None);
-
-        let deep = vec!["*.a.example.com".to_string()];
-        assert_eq!(
-            coverage(&deep, "x.a.example.com"),
-            Some(MatchKind::Wildcard)
-        );
-        assert_eq!(coverage(&deep, "a.example.com"), None);
-        assert_eq!(coverage(&deep, "x.y.a.example.com"), None);
-    }
-
-    #[test]
-    fn serial_norm_strips_separators_and_zeros() {
-        assert_eq!(serial_norm("0A:0B:0C"), "a0b0c");
-        assert_eq!(serial_norm("00ABC"), "abc");
-        assert_eq!(serial_norm("0abc"), "abc");
-        assert_eq!(serial_norm("0000"), "0");
-        assert_eq!(serial_norm(""), "0");
-        assert_eq!(serial_norm("deadbeef"), "deadbeef");
-    }
-
-    #[test]
-    fn validity_semantics_match_jq_epoch_zero() {
-        let now = utc("2026-09-21T12:00:00Z");
-        let nb = utc("2026-01-01T00:00:00Z");
-        let na = utc("2027-01-01T00:00:00Z");
-        assert!(currently_valid(Some(nb), Some(na), now));
-        assert!(!future_valid(Some(nb), now));
-
-        let future_nb = utc("2027-06-01T00:00:00Z");
-        assert!(!currently_valid(Some(future_nb), Some(na), now));
-        assert!(future_valid(Some(future_nb), now));
-
-        assert!(!currently_valid(Some(nb), None, now));
-        assert!(!currently_valid(None, None, now));
+    fn r(
+        id: u64,
+        common_name: &str,
+        name_value: &str,
+        not_before: &str,
+        not_after: &str,
+        serial: &str,
+    ) -> CtShRow {
+        CtShRow {
+            id: Some(id as i64),
+            common_name: Some(common_name.into()),
+            name_value: Some(name_value.into()),
+            not_before: Some(not_before.into()),
+            not_after: Some(not_after.into()),
+            serial_number: Some(serial.into()),
+            ..CtShRow {
+                id: None,
+                issuer_ca_id: None,
+                issuer_name: None,
+                name_value: None,
+                common_name: None,
+                not_before: None,
+                not_after: None,
+                serial_number: None,
+                min_entry_timestamp: None,
+                cert: None,
+            }
+        }
     }
 
     #[test]
     fn certificates_dedups_by_serial_and_collects_ids() {
         let rows = vec![
-            CtRow {
-                id: Some(2),
-                common_name: Some("www.example.com".into()),
-                name_value: Some("www.example.com\nexample.com".into()),
-                not_before: Some("2026-01-01T00:00:00".into()),
-                not_after: Some("2027-01-01T00:00:00".into()),
-                serial_number: Some("0AA11".into()),
-            },
-            CtRow {
-                id: Some(1),
-                common_name: Some("www.example.com".into()),
-                name_value: Some("www.example.com".into()),
-                not_before: Some("2026-01-01T00:00:00".into()),
-                not_after: Some("2027-01-01T00:00:00".into()),
-                serial_number: Some("AA11".into()),
-            },
-            CtRow {
-                id: Some(3),
-                common_name: Some("future".into()),
-                name_value: Some("future.example.com".into()),
-                not_before: Some("2027-06-01T00:00:00".into()),
-                not_after: Some("2028-01-01T00:00:00".into()),
-                serial_number: Some("BB22".into()),
-            },
-            CtRow {
-                id: Some(4),
-                common_name: Some("expired".into()),
-                name_value: Some("expired.example.com".into()),
-                not_before: Some("2020-01-01T00:00:00".into()),
-                not_after: Some("2021-01-01T00:00:00".into()),
-                serial_number: Some("CC33".into()),
-            },
+            r(2, "www.example.com", "www.example.com\nexample.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "0AA11"),
+            r(1, "www.example.com", "www.example.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "AA11"),
+            r(3, "future", "future.example.com", "2027-06-01T00:00:00", "2028-01-01T00:00:00", "BB22"),
+            r(4, "expired", "expired.example.com", "2020-01-01T00:00:00", "2021-01-01T00:00:00", "CC33"),
         ];
         let now = utc("2026-09-21T12:00:00Z");
         let certs = certificates(&rows, now);
@@ -530,22 +308,8 @@ mod tests {
     fn cert_refs_exact_and_wildcard() {
         let now = utc("2026-09-21T12:00:00Z");
         let rows = vec![
-            CtRow {
-                id: Some(1),
-                common_name: Some("www.example.com".into()),
-                name_value: Some("www.example.com".into()),
-                not_before: Some("2026-01-01T00:00:00".into()),
-                not_after: Some("2027-01-01T00:00:00".into()),
-                serial_number: Some("AA11".into()),
-            },
-            CtRow {
-                id: Some(2),
-                common_name: Some("*.example.com".into()),
-                name_value: Some("*.example.com".into()),
-                not_before: Some("2026-01-01T00:00:00".into()),
-                not_after: Some("2027-01-01T00:00:00".into()),
-                serial_number: Some("BB22".into()),
-            },
+            r(1, "www.example.com", "www.example.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "AA11"),
+            r(2, "*.example.com", "*.example.com", "2026-01-01T00:00:00", "2027-01-01T00:00:00", "BB22"),
         ];
         let certs = certificates(&rows, now);
         let refs = cert_refs(&certs, "vpn.example.com");

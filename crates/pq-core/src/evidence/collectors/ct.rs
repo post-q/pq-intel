@@ -18,6 +18,7 @@ use crate::evidence::observation::{RawArtifact, RawObservation, StoredObservatio
 use crate::evidence::scan::Scan;
 use crate::evidence::store::Store;
 use crate::net::normalize_domain;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -95,15 +96,159 @@ pub fn ct_rows_to_raw_observation(rows: &[CtShRow]) -> Result<RawObservation> {
         "count": rows.len(),
         "newest_entry": newest_entry,
     }));
-    raw.source_time = newest_entry
-        .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-        .map(|t| t.into());
+    raw.source_time = newest_entry.and_then(|ts| ctdate(ts));
     raw.artifacts.push(RawArtifact {
         role: "ct_response".into(),
         bytes: serde_json::to_vec(rows)?,
         content_type: "application/json; role=ct-rows".into(),
     });
     Ok(raw)
+}
+
+// Certwatch row semantics shared by every consumer of crt.sh data (this
+// collector, pq-map's model mapping, downstream analysis): timestamp
+// repair, name-list handling, RFC 6125 coverage, serial normalization,
+// and jq-epoch validity. One definition per external quirk.
+
+/// Where a certificate matches a host: exact name equality or an RFC 6125
+/// single-label wildcard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchKind {
+    Exact,
+    Wildcard,
+}
+
+/// crt.sh timestamps carry no zone ("2014-04-23T12:16:09"); RFC 3339
+/// requires one. jq's fromdateiso8601 also accepts compact offsets
+/// (+0200); chrono needs +02:00. The certwatch DB ::text shape is naive.
+pub fn ctdate(raw: &str) -> Option<DateTime<Utc>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let with_t = raw.replace(' ', "T");
+    let with_zone = if has_explicit_zone(&with_t) {
+        normalize_zone(with_t)
+    } else {
+        format!("{with_t}Z")
+    };
+    DateTime::parse_from_rfc3339(&with_zone)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// +HHMM → +HH:MM so that RFC 3339 parsing succeeds.
+fn normalize_zone(s: String) -> String {
+    let b = s.as_bytes();
+    if b.len() >= 5 {
+        let tail = &b[b.len() - 5..];
+        if (tail[0] == b'+' || tail[0] == b'-') && tail[1..].iter().all(u8::is_ascii_digit) {
+            return format!(
+                "{}{}:{}",
+                &s[..s.len() - 5],
+                &s[s.len() - 5..s.len() - 2],
+                &s[s.len() - 2..]
+            );
+        }
+    }
+    s
+}
+
+fn has_explicit_zone(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.ends_with(b"Z") || b.ends_with(b"z") {
+        return true;
+    }
+    // +HH:MM (6 bytes) or +HHMM (5 bytes)
+    let check = |len: usize| -> bool {
+        if b.len() < len {
+            return false;
+        }
+        let t = &b[b.len() - len..];
+        if t[0] != b'+' && t[0] != b'-' {
+            return false;
+        }
+        let rest = &t[1..];
+        match len {
+            6 => {
+                rest[0].is_ascii_digit()
+                    && rest[1].is_ascii_digit()
+                    && rest[2] == b':'
+                    && rest[3].is_ascii_digit()
+                    && rest[4].is_ascii_digit()
+            }
+            5 => rest.iter().all(u8::is_ascii_digit),
+            _ => false,
+        }
+    };
+    check(6) || check(5)
+}
+
+/// SANs/CN of a `name_value` row: split, lowercased, sorted, deduped.
+pub fn names(name_value: &str) -> Vec<String> {
+    let mut out: Vec<String> = name_value
+        .split('\n')
+        .map(|n| n.trim().to_lowercase())
+        .filter(|n| !n.is_empty())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+pub fn is_wildcard(name: &str) -> bool {
+    name.starts_with("*.")
+}
+
+/// RFC 6125 single-label wildcard: `*.base` covers `x.base` only - not `a.b.base`, not `base`.
+pub fn coverage(identities: &[String], host: &str) -> Option<MatchKind> {
+    if identities.iter().any(|n| n == host) {
+        return Some(MatchKind::Exact);
+    }
+    for n in identities {
+        if let Some(base) = n.strip_prefix("*.") {
+            let host_labels = host.split('.').count();
+            let base_labels = base.split('.').count();
+            if host_labels == base_labels + 1 && host.ends_with(&format!(".{base}")) {
+                return Some(MatchKind::Wildcard);
+            }
+        }
+    }
+    None
+}
+
+fn epoch(dt: Option<DateTime<Utc>>) -> i64 {
+    dt.map_or(0, |d| d.timestamp())
+}
+
+/// Missing dates behave like epoch 0 (crt.sh jq semantics): no `not_after` means not valid.
+pub fn currently_valid(
+    nb: Option<DateTime<Utc>>,
+    na: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> bool {
+    let now = now.timestamp();
+    epoch(nb) <= now && epoch(na) >= now
+}
+
+pub fn future_valid(nb: Option<DateTime<Utc>>, now: DateTime<Utc>) -> bool {
+    epoch(nb) > now.timestamp()
+}
+
+/// Hex serial → lowercase, separators and leading zeros stripped (`0` for empty).
+pub fn serial_norm(raw: &str) -> String {
+    let hex: String = raw
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    let stripped = hex.trim_start_matches('0');
+    if stripped.is_empty() {
+        "0".to_string()
+    } else {
+        stripped.to_string()
+    }
 }
 
 /// The CT collector. Clones share the executor.
@@ -256,5 +401,81 @@ mod tests {
             crate::evidence::observation::ObservationStatus::Success
         );
         assert!(raw.source_time.is_none());
+    }
+
+    fn utc(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn observation_source_time_repairs_zoneless_crtsh_timestamps() {
+        let rows = vec![CtShRow {
+            min_entry_timestamp: Some("2014-04-23 12:16:09".into()),
+            ..row(1, "example.com", "2014-04-23 12:16:09")
+        }];
+        let raw = ct_rows_to_raw_observation(&rows).unwrap();
+        assert_eq!(raw.source_time, Some(utc("2014-04-23T12:16:09Z")));
+    }
+
+    #[test]
+    fn ctdate_appends_zone_when_missing() {
+        assert_eq!(ctdate("2014-04-23T12:16:09").unwrap(), utc("2014-04-23T12:16:09Z"));
+        assert_eq!(ctdate("2014-04-23 12:16:09").unwrap(), utc("2014-04-23T12:16:09Z"));
+        // certwatch DB ::text shape: naive, no zone suffix.
+        assert_eq!(ctdate("2026-05-27 00:00:00").unwrap(), utc("2026-05-27T00:00:00Z"));
+        assert_eq!(ctdate("2014-04-23T12:16:09Z").unwrap(), utc("2014-04-23T12:16:09Z"));
+        assert_eq!(ctdate("2014-04-23T12:16:09+02:00").unwrap(), utc("2014-04-23T10:16:09Z"));
+        assert_eq!(ctdate("2014-04-23T12:16:09+0200").unwrap(), utc("2014-04-23T10:16:09Z"));
+        assert!(ctdate("").is_none());
+        assert!(ctdate("not a date").is_none());
+    }
+
+    #[test]
+    fn names_splits_lowers_and_dedups() {
+        assert_eq!(
+            names("WWW.Example.COM\r\nmail.example.com\n\nmail.example.com"),
+            vec!["mail.example.com", "www.example.com"]
+        );
+        assert_eq!(names(""), Vec::<String>::new());
+    }
+
+    #[test]
+    fn coverage_follows_rfc_6125_single_label() {
+        let idents = vec!["example.com".to_string(), "*.example.com".to_string()];
+        assert_eq!(coverage(&idents, "example.com"), Some(MatchKind::Exact));
+        assert_eq!(coverage(&idents, "www.example.com"), Some(MatchKind::Wildcard));
+        assert_eq!(coverage(&idents, "a.b.example.com"), None);
+        assert_eq!(coverage(&idents, "other.pl"), None);
+
+        let deep = vec!["*.a.example.com".to_string()];
+        assert_eq!(coverage(&deep, "x.a.example.com"), Some(MatchKind::Wildcard));
+        assert_eq!(coverage(&deep, "a.example.com"), None);
+        assert_eq!(coverage(&deep, "x.y.a.example.com"), None);
+    }
+
+    #[test]
+    fn serial_norm_strips_separators_and_zeros() {
+        assert_eq!(serial_norm("0A:0B:0C"), "a0b0c");
+        assert_eq!(serial_norm("00ABC"), "abc");
+        assert_eq!(serial_norm("0abc"), "abc");
+        assert_eq!(serial_norm("0000"), "0");
+        assert_eq!(serial_norm(""), "0");
+        assert_eq!(serial_norm("deadbeef"), "deadbeef");
+    }
+
+    #[test]
+    fn validity_semantics_match_jq_epoch_zero() {
+        let now = utc("2026-09-21T12:00:00Z");
+        let nb = utc("2026-01-01T00:00:00Z");
+        let na = utc("2027-01-01T00:00:00Z");
+        assert!(currently_valid(Some(nb), Some(na), now));
+        assert!(!future_valid(Some(nb), now));
+
+        let future_nb = utc("2027-06-01T00:00:00Z");
+        assert!(!currently_valid(Some(future_nb), Some(na), now));
+        assert!(future_valid(Some(future_nb), now));
+
+        assert!(!currently_valid(Some(nb), None, now));
+        assert!(!currently_valid(None, None, now));
     }
 }

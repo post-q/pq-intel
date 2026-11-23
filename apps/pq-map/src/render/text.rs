@@ -1,5 +1,7 @@
 use crate::model::{DomainState, Host, ProbeStatus, ScanState};
 
+use pq_core::evidence::collectors::ports::presets::port_service;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Category {
     /// Valid certificate + service observed.
@@ -98,7 +100,7 @@ pub fn combined(state: &DomainState) -> String {
                         if scan.state != ScanState::Open {
                             continue;
                         }
-                        let mut label = crate::model::port_service(scan.port).to_string();
+                        let mut label = port_service(scan.port).to_string();
                         label.push(':');
                         label.push_str(&scan.port.to_string());
                         if scan.port == 25 && mx_targets.contains(host.name.as_str()) {
@@ -196,7 +198,7 @@ pub fn summary(state: &DomainState) -> String {
     for cert in state.certs.values().filter(|c| c.currently_valid) {
         for name in &cert.identities {
             identities.insert(name.clone());
-            if crate::discover::ct::is_wildcard(name) {
+            if pq_core::evidence::collectors::ct::is_wildcard(name) {
                 wildcards.insert(name.clone());
             } else {
                 concrete.insert(name.clone());
@@ -239,7 +241,7 @@ pub fn hosts(state: &DomainState) -> String {
     let mut names = std::collections::BTreeSet::new();
     for cert in state.certs.values().filter(|c| c.currently_valid) {
         for name in &cert.identities {
-            if !crate::discover::ct::is_wildcard(name) {
+            if !pq_core::evidence::collectors::ct::is_wildcard(name) {
                 names.insert(name.clone());
             }
         }
@@ -295,7 +297,8 @@ fn fmt_date(dt: Option<chrono::DateTime<chrono::Utc>>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{MatchKind, fixture};
+    use crate::model::fixture;
+    use pq_core::evidence::collectors::ct::MatchKind;
 
     /// Cells of the first table row whose host column starts with `name`.
     fn row_cells(text: &str, name: &str) -> String {

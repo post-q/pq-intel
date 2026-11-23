@@ -7,6 +7,9 @@
 
 pub mod evidence;
 pub mod net;
+/// X.509/TLS naming semantics shared by all tools (OID tables, algorithm
+/// classification, canonical cert signature/key names, cipher suites).
+pub mod x509;
 
 /// Expand a leading `~` to `$HOME` (CLI convenience shared by the tools;
 /// systemd units pass absolute paths, so this only serves interactive use).
