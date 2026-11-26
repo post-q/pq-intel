@@ -5,6 +5,7 @@
 //! wire-format, rustls TLS) live beside the traits they implement, so tests
 //! run the same collectors against canned transports.
 
+pub mod asn;
 pub mod ct;
 pub mod ctdb;
 pub mod dns;
