@@ -649,6 +649,29 @@ fn max_age_requires_recent_data() {
 
 // --- helpers -----------------------------------------------------------------
 
+/// The tasking plane's scan link (schema v4) must be plain data: written
+/// once from the invocation at insert, readable as a column, never
+/// re-parsed per query.
+#[test]
+fn scan_task_id_is_plain_data() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = pq_core::evidence::Store::open(dir.path()).unwrap();
+    store
+        .begin_scan("pq-hub", json!({ "task_id": 7, "pass": "ct" }))
+        .unwrap();
+    store.begin_scan("pq-map", json!({ "argv": [] })).unwrap();
+    let rows: Vec<Option<i64>> = store
+        .with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT task_id FROM scans ORDER BY id")?;
+            let v = stmt
+                .query_map([], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(v)
+        })
+        .unwrap();
+    assert_eq!(rows, vec![Some(7), None], "extracted once at write; task-less stays NULL");
+}
+
 fn policy_expired_immediately(kind: &str) -> pq_core::evidence::Policy {
     pq_core::evidence::Policy {
         kind: kind.into(),

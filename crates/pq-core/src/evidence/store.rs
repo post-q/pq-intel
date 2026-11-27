@@ -299,7 +299,11 @@ impl Store {
         let now = now_secs();
         let id = self.inner.with_conn(|conn| {
             conn.execute(
-                "INSERT INTO scans (tool, invocation, started_at) VALUES (?1, ?2, ?3)",
+                // The task link is extracted once here and stored as plain
+                // data (scans.task_id, schema v4) — never re-parsed from
+                // `invocation` per query.
+                "INSERT INTO scans (tool, invocation, started_at, task_id)
+                 VALUES (?1, ?2, ?3, json_extract(?2, '$.task_id'))",
                 rusqlite::params![tool, invocation.to_string(), now],
             )?;
             Ok(conn.last_insert_rowid())

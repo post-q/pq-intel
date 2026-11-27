@@ -16,6 +16,7 @@ pub(crate) const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("schema_v1.sql")),
     (2, include_str!("schema_v2.sql")),
     (3, include_str!("schema_v3.sql")),
+    (4, include_str!("schema_v4.sql")),
 ];
 
 /// **Low-level seam.** Apply the store's versioned migrations to a raw
