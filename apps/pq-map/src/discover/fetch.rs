@@ -86,12 +86,12 @@ fn obtain_blocking(
     let Some(db_req) = CtdbRequest::new(domain) else {
         return Err(Error::NoCtData);
     };
-    let db_collector = CtdbCollector {
-        cfg: certwatch_cfg(cfg),
-        drive: Arc::new(pq_core::evidence::collectors::ctdb::Drive::Handle(
+    let db_collector = CtdbCollector::new(
+        certwatch_cfg(cfg),
+        Arc::new(pq_core::evidence::collectors::ctdb::Drive::Handle(
             rt.clone(),
         )),
-    };
+    );
     match ev
         .scan
         .collect(&db_collector, db_req.clone(), requirement.clone())

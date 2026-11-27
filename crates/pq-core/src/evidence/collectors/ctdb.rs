@@ -49,7 +49,7 @@ impl Default for CertwatchConfig {
 }
 
 /// One certwatch snapshot row (the DB column shape).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DbRow {
     pub cert_id: i64,
     pub serial: String,
@@ -336,9 +336,25 @@ impl Drive {
 
 /// Live certwatch read, recorded as a collection. Runs the Postgres query
 /// through the configured driver (see [`Drive`]).
+///
+/// Every clone shares one lazily-connected certwatch connection
+/// ([`Session`]): snapshot query, then the chain walk, then the next
+/// task's snapshot — connecting to crt.sh is expensive, so a crawl pass
+/// holds one connection, not one per task.
 pub struct CtdbCollector {
     pub cfg: CertwatchConfig,
     pub drive: std::sync::Arc<Drive>,
+    pub session: std::sync::Arc<tokio::sync::Mutex<Session>>,
+}
+
+impl CtdbCollector {
+    pub fn new(cfg: CertwatchConfig, drive: std::sync::Arc<Drive>) -> Self {
+        Self {
+            session: std::sync::Arc::new(tokio::sync::Mutex::new(Session::new(&cfg))),
+            cfg,
+            drive,
+        }
+    }
 }
 
 impl Collector for CtdbCollector {
@@ -351,16 +367,22 @@ impl Collector for CtdbCollector {
         req: &Self::Request,
         _prior: Option<&StoredObservation>,
     ) -> Result<RawObservation, CollectionError> {
-        let rows = self
-            .drive
-            .block_on(async {
-                let mut session = Session::new(&self.cfg);
-                session.fetch_rows(&req.domain, &self.cfg).await
-            })
-            .map_err(|e| CollectionError::Error {
-                native: None,
-                message: format!("certwatch: {e}"),
-            })?;
+        // Snapshot query, then the chain walk over the resulting leaf ids,
+        // on ONE reused connection (connecting to crt.sh is expensive):
+        // one recursive CTE answers every current leaf at once. A chain
+        // failure never discards the snapshot — it retries on the next
+        // due crawl.
+        let fetched = self.drive.block_on(async {
+            let mut session = self.session.lock().await;
+            let rows = session.fetch_rows(&req.domain, &self.cfg).await?;
+            let ids: Vec<u64> = rows.iter().map(|r| r.cert_id as u64).collect();
+            let chains = chain_rows(&mut session, &ids, &self.cfg).await;
+            Ok::<_, String>((rows, chains))
+        });
+        let (rows, chains) = fetched.map_err(|e| CollectionError::Error {
+            native: None,
+            message: format!("certwatch: {e}"),
+        })?;
         if rows.is_empty() {
             return Err(CollectionError::NotFound {
                 native: Some("certwatch: no rows".into()),
@@ -379,6 +401,24 @@ impl Collector for CtdbCollector {
             bytes,
             content_type: "application/json; role=certwatch-rows".into(),
         });
+        match chains {
+            Ok(chains) if !chains.is_empty() => match serde_json::to_vec(&chains) {
+                Ok(bytes) => {
+                    observation.metadata["chain_count"] = serde_json::json!(chains.len());
+                    observation.artifacts.push(RawArtifact {
+                        role: "ct_chains".into(),
+                        bytes,
+                        content_type: "application/json; role=certwatch-chains".into(),
+                    });
+                }
+                Err(e) => eprintln!("CT: serialize chains: {e}"),
+            },
+            Ok(_) => {}
+            Err(e) => eprintln!(
+                "CT: chain walk failed for {} ({e}); snapshot kept, retries next crawl",
+                req.domain
+            ),
+        }
         Ok(observation)
     }
 
@@ -398,9 +438,30 @@ impl Collector for CtdbCollector {
     }
 }
 
+/// The stored chain walk of a `ct-db` observation: leaf id → signing path
+/// (one [`ChainEntry`] per level, leaf first). `Ok(empty)` for
+/// observations collected before the chain walk rode the crawl.
+pub fn chains_from_observation(
+    store: &Store,
+    obs: &StoredObservation,
+) -> crate::evidence::error::Result<std::collections::BTreeMap<u64, Vec<ChainEntry>>> {
+    match obs.artifact_by_role("ct_chains") {
+        None => Ok(std::collections::BTreeMap::new()),
+        Some(artifact) => {
+            let bytes = store.read_artifact(artifact)?;
+            serde_json::from_slice(&bytes).map_err(|e| {
+                crate::evidence::error::Error::Misuse(format!(
+                    "bad ct_chains artifact in observation {}: {e}",
+                    obs.id
+                ))
+            })
+        }
+    }
+}
+
 /// One issuer→subject hop in a reconstructed certwatch chain: the leaf's
 /// signing path, one row per (leaf, depth).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChainEntry {
     pub depth: u32,
     pub certificate_id: u64,
@@ -617,5 +678,142 @@ mod tests {
         assert!(ct_sql("").is_err());
         assert!(ct_sql("a'.--").is_err(), "no quotes/semicolons in the SQL");
         assert!(ct_sql("under_score.example").is_err());
+    }
+
+    #[test]
+    fn chain_sql_batches_all_leaf_ids_into_one_query() {
+        let sql = chain_sql(&[7, 9, 42]);
+        assert!(sql.contains("ARRAY[7,9,42]::bigint[]"), "{sql}");
+        assert!(sql.contains("RECURSIVE"), "{sql}");
+    }
+
+    fn db_row_fixture() -> DbRow {
+        DbRow {
+            cert_id: 7,
+            serial: "0a".into(),
+            dns_name: Some("gov.pl".into()),
+            common_name: Some("gov.pl".into()),
+            not_before: Some("2026-01-01T00:00:00".into()),
+            not_after: Some("2027-01-01T00:00:00".into()),
+            key_algorithm: Some("id-Ed25519".into()),
+            key_size: Some(256),
+            sig_key_algorithm: Some("Ed25519".into()),
+            sig_hash_algorithm: None,
+            issuer_ca_name: Some("Test CA".into()),
+        }
+    }
+
+    fn chains_fixture() -> std::collections::BTreeMap<u64, Vec<ChainEntry>> {
+        let mut chains = std::collections::BTreeMap::new();
+        chains.insert(
+            7,
+            vec![ChainEntry {
+                depth: 0,
+                certificate_id: 7,
+                common_name: Some("gov.pl".into()),
+                ski: Some("ab".into()),
+                aki: None,
+                not_before: None,
+                not_after: None,
+                key_algorithm: Some("id-Ed25519".into()),
+                key_size: Some(256),
+                signature_key_algorithm: Some("Ed25519".into()),
+                signature_hash_algorithm: None,
+                issuer_ca_name: Some("Test CA".into()),
+            }],
+        );
+        chains
+    }
+
+    /// A stand-in for the live certwatch read: emits the exact observation
+    /// shape `CtdbCollector::collect` produces (snapshot rows plus the
+    /// chain walk as a second artifact on the same observation).
+    struct ChainFake {
+        with_chains: bool,
+    }
+
+    impl Collector for ChainFake {
+        type Request = CtdbRequest;
+        type Output = Vec<DbRow>;
+
+        fn collect(
+            &self,
+            _scan: &Scan,
+            _req: &Self::Request,
+            _prior: Option<&StoredObservation>,
+        ) -> Result<RawObservation, CollectionError> {
+            let mut observation =
+                RawObservation::success(serde_json::json!({ "source": "db", "row_count": 1 }));
+            observation.artifacts.push(RawArtifact {
+                role: "ct_rows".into(),
+                bytes: serde_json::to_vec(&vec![db_row_fixture()]).unwrap(),
+                content_type: "application/json; role=certwatch-rows".into(),
+            });
+            if self.with_chains {
+                observation.artifacts.push(RawArtifact {
+                    role: "ct_chains".into(),
+                    bytes: serde_json::to_vec(&chains_fixture()).unwrap(),
+                    content_type: "application/json; role=certwatch-chains".into(),
+                });
+            }
+            Ok(observation)
+        }
+
+        fn decode(
+            &self,
+            store: &Store,
+            obs: &StoredObservation,
+        ) -> crate::evidence::error::Result<Self::Output> {
+            let artifact = obs.artifact_by_role("ct_rows").ok_or_else(|| {
+                crate::evidence::error::Error::Misuse("no ct_rows artifact".into())
+            })?;
+            let rows: Vec<DbRow> = serde_json::from_slice(&store.read_artifact(artifact)?)?;
+            Ok(rows)
+        }
+    }
+
+    #[test]
+    fn chains_ride_the_ctdb_observation_and_read_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let scan = store
+            .begin_scan("test", serde_json::json!({ "test": true }))
+            .unwrap();
+        let outcome = scan
+            .collect(
+                &ChainFake { with_chains: true },
+                CtdbRequest::new("gov.pl").unwrap(),
+                crate::evidence::FreshnessRequirement::Refresh,
+            )
+            .unwrap();
+        let obs = outcome.observation.expect("stored observation");
+        assert_eq!(
+            chains_from_observation(&store, &obs).unwrap(),
+            chains_fixture()
+        );
+        assert_eq!(
+            ChainFake { with_chains: true }
+                .decode(&store, &obs)
+                .unwrap(),
+            vec![db_row_fixture()]
+        );
+    }
+
+    #[test]
+    fn pre_chain_observations_read_as_no_chains() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        let scan = store
+            .begin_scan("test", serde_json::json!({ "test": true }))
+            .unwrap();
+        let outcome = scan
+            .collect(
+                &ChainFake { with_chains: false },
+                CtdbRequest::new("gov.pl").unwrap(),
+                crate::evidence::FreshnessRequirement::Refresh,
+            )
+            .unwrap();
+        let obs = outcome.observation.expect("stored observation");
+        assert!(chains_from_observation(&store, &obs).unwrap().is_empty());
     }
 }
