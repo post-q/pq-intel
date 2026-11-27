@@ -9,11 +9,11 @@
 use crate::evidence::error::Result;
 use rusqlite::Connection;
 
-use super::migrations::{self, Step};
+use super::migrations::{self, Migration, Step};
 
-/// Ordered migration commands: `(epoch, steps)`. Append-only; a new
-/// migration is always a new entry, never an edit of an applied one.
-pub(crate) const MIGRATIONS: &[(i64, &[Step])] = &[
+/// Ordered migration commands. Append-only; a new migration is always a
+/// new entry, never an edit of an applied one.
+pub(crate) const MIGRATIONS: &[Migration] = &[
     (
         1_795_432_897,
         &[Step::Sql(include_str!("migrations/1795432897.sql"))],
@@ -29,7 +29,11 @@ pub(crate) const MIGRATIONS: &[(i64, &[Step])] = &[
     (
         1_795_774_756,
         &[
-            Step::Fn(add_scans_task_id_column),
+            Step::AddColumnIfAbsent {
+                table: "scans",
+                column: "task_id",
+                ddl: "ALTER TABLE scans ADD COLUMN task_id INTEGER;",
+            },
             Step::Sql(include_str!("migrations/1795774756.sql")),
         ],
     ),
@@ -44,22 +48,6 @@ pub(crate) const MIGRATIONS: &[(i64, &[Step])] = &[
 /// `Store::open` run this.
 pub fn migrate(conn: &Connection) -> Result<()> {
     migrations::apply(conn, "schema_migrations", MIGRATIONS)
-}
-
-/// Add `scans.task_id` if absent. SQLite cannot `ADD COLUMN IF NOT
-/// EXISTS`; stores whose ledger predates the epoch renaming already have
-/// the column (the command originally ran as schema_v4), so the pragma
-/// guard keeps the command re-runnable across both ledger shapes.
-fn add_scans_task_id_column(conn: &Connection) -> Result<()> {
-    let present: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('scans') WHERE name = 'task_id'",
-        [],
-        |r| r.get(0),
-    )?;
-    if present == 0 {
-        conn.execute_batch("ALTER TABLE scans ADD COLUMN task_id INTEGER;")?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -121,17 +109,19 @@ mod tests {
         );
     }
 
-    /// Old development stores carry ledgers recording versions 1..4 from
-    /// the pre-epoch numbering, over a fully built schema; the epoch
-    /// commands must adopt them (every statement a no-op, ledger extended,
-    /// data untouched) rather than crash on re-creation.
+    /// A genuine pre-epoch store: schema fully built, journal keyed by
+    /// bare `version` numbers as the old runner recorded them. The epoch
+    /// commands must adopt it — journal rebuilt with the real epochs,
+    /// replay a no-op, data untouched — not crash on the missing `epoch`
+    /// column.
     #[test]
     fn epoch_commands_adopt_pre_epoch_ledgers() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(
-            "DELETE FROM schema_migrations;
-             INSERT INTO schema_migrations (epoch, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0);",
+            "DROP TABLE schema_migrations;
+             CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL);
+             INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0), (2, 0), (3, 0), (4, 0);",
         )
         .unwrap();
         let policies_before: i64 = conn
@@ -151,10 +141,7 @@ mod tests {
         };
         assert_eq!(
             applied,
-            [1, 2, 3, 4]
-                .into_iter()
-                .chain(MIGRATIONS.iter().map(|(v, _)| *v))
-                .collect::<Vec<_>>()
+            MIGRATIONS.iter().map(|(v, _)| *v).collect::<Vec<_>>()
         );
         let policies_after: i64 = conn
             .query_row("SELECT COUNT(*) FROM refresh_policies", [], |r| r.get(0))
