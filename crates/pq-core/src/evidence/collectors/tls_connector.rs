@@ -56,6 +56,11 @@ pub enum TlsConnectError {
     Timeout(Duration),
     #[error("dns resolution failed: {0}")]
     Dns(String),
+    /// The host answered and refused the connection: nothing listens on
+    /// the endpoint. An answer about the world, not a failure - recorded
+    /// as a completed capture.
+    #[error("connection refused")]
+    Refused,
     #[error("connection failed: {0}")]
     Connection(String),
     #[error("handshake failed: {message} (alert: {alert:?})")]
@@ -276,19 +281,28 @@ impl TlsConnector for RustlsConnector {
             .map_err(|e| TlsConnectError::Dns(e.to_string()))?;
         let mut last_err = None;
         let mut sock = None;
+        let mut all_refused = true;
         for addr in addr_iter {
             match TcpStream::connect_timeout(&addr, self.timeout) {
                 Ok(s) => {
                     sock = Some(s);
                     break;
                 }
-                Err(e) => last_err = Some(e),
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::ConnectionRefused {
+                        all_refused = false;
+                    }
+                    last_err = Some(e);
+                }
             }
         }
         let mut sock = sock.ok_or_else(|| match last_err {
             Some(e) if e.kind() == std::io::ErrorKind::TimedOut => {
                 TlsConnectError::Timeout(self.timeout)
             }
+            // Every attempted address refused: the endpoint answered -
+            // nothing listens. Any other error leaves the kind unknown.
+            Some(_) if all_refused => TlsConnectError::Refused,
             Some(e) => TlsConnectError::Connection(e.to_string()),
             None => TlsConnectError::Connection("no addresses".into()),
         })?;

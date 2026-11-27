@@ -131,18 +131,31 @@ impl Collector for HttpCollector {
             body: req.body.clone(),
             timeout: req.timeout,
         };
-        let response = self.http.execute(&request).map_err(|e| match e {
-            HttpExecError::Timeout(d) => CollectionError::Timeout {
-                native: Some(format!("timed out after {d:?}")),
-            },
-            HttpExecError::RateLimited(status) => CollectionError::RateLimited {
-                native: Some(status.to_string()),
-            },
-            other => CollectionError::Error {
-                native: None,
-                message: other.to_string(),
-            },
-        })?;
+        let response = match self.http.execute(&request) {
+            Ok(response) => response,
+            Err(HttpExecError::Timeout(d)) => {
+                return Err(CollectionError::Timeout {
+                    native: Some(format!("timed out after {d:?}")),
+                });
+            }
+            Err(HttpExecError::RateLimited(status)) => {
+                return Err(CollectionError::RateLimited {
+                    native: Some(status.to_string()),
+                });
+            }
+            // The endpoint answered: nothing listens. Definitive endpoint
+            // absence - an answer, recorded as knowledge, like a dns
+            // NXDOMAIN.
+            Err(HttpExecError::Refused) => {
+                return Ok(super::closed_observation("http:closed", &req.url));
+            }
+            Err(other) => {
+                return Err(CollectionError::Error {
+                    native: None,
+                    message: other.to_string(),
+                });
+            }
+        };
 
         let (status, native) = response_to_observation_parts(response.status);
 
@@ -199,14 +212,21 @@ impl Collector for HttpCollector {
     }
 
     fn decode(&self, store: &Store, obs: &StoredObservation) -> Result<HttpObservation> {
-        let headers_artifact = obs.artifact_by_role("response_headers").ok_or_else(|| {
-            crate::evidence::error::Error::Misuse(format!(
-                "observation {} has no response_headers artifact",
-                obs.id
-            ))
-        })?;
-        let headers: Vec<(String, String)> =
-            serde_json::from_slice(&store.read_artifact(headers_artifact)?)?;
+        // A refusal carries no response at all: empty typed view, and the
+        // missing response_headers artifact is the answer's shape, not
+        // corruption.
+        let refusal = super::is_closed_observation(obs);
+        let headers_artifact = obs.artifact_by_role("response_headers");
+        let headers: Vec<(String, String)> = match headers_artifact {
+            Some(a) => serde_json::from_slice(&store.read_artifact(a)?)?,
+            None if refusal => vec![],
+            None => {
+                return Err(crate::evidence::error::Error::Misuse(format!(
+                    "observation {} has no response_headers artifact",
+                    obs.id
+                )));
+            }
+        };
         let body = match obs.artifact_by_role("response_body") {
             Some(meta) => store.read_artifact(meta)?,
             None => vec![],

@@ -76,10 +76,19 @@ impl Collector for TlsCollector {
         req: &TlsRequest,
         _prior: Option<&StoredObservation>,
     ) -> Result<RawObservation, CollectionError> {
-        let facts = self
-            .connector
-            .connect(&req.endpoint)
-            .map_err(map_connect_error)?;
+        let facts = match self.connector.connect(&req.endpoint) {
+            Ok(facts) => facts,
+            // The endpoint answered: nothing listens. Definitive endpoint
+            // absence - an answer, recorded as knowledge, like a dns
+            // NXDOMAIN.
+            Err(TlsConnectError::Refused) => {
+                return Ok(super::closed_observation(
+                    "tls:closed",
+                    &format!("{}:{}", req.endpoint.host, req.endpoint.port),
+                ));
+            }
+            Err(e) => return Err(map_connect_error(e)),
+        };
         Ok(session_to_observation(
             &req.endpoint.host,
             req.endpoint.port,
@@ -88,6 +97,25 @@ impl Collector for TlsCollector {
     }
 
     fn decode(&self, store: &Store, obs: &StoredObservation) -> Result<TlsObservation> {
+        if super::is_closed_observation(obs) {
+            // A refused connect has no session to reconstruct: the typed
+            // view is an empty session over the recorded endpoint.
+            return Ok(TlsObservation {
+                session: TlsSessionFacts {
+                    protocol_version: String::new(),
+                    cipher_suite: String::new(),
+                    kex_group: String::new(),
+                    alpn_negotiated: None,
+                    sni_used: obs
+                        .metadata
+                        .get("endpoint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    chain: vec![],
+                },
+            });
+        }
         let leaf = obs
             .artifact_by_role("leaf_certificate")
             .map(|meta| store.read_artifact(meta))
@@ -103,7 +131,6 @@ impl Collector for TlsCollector {
         Ok(TlsObservation { session })
     }
 }
-
 /// Typed view over the stored metadata.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TlsMetadata {
@@ -143,6 +170,12 @@ fn map_connect_error(e: TlsConnectError) -> CollectionError {
         TlsConnectError::Connection(m) => CollectionError::Error {
             native: Some("tls:connection".into()),
             message: m,
+        },
+        // Unreachable through the collector: the Refused answer is
+        // mapped to a closed observation before this mapper runs.
+        TlsConnectError::Refused => CollectionError::Error {
+            native: Some("tls:connection".into()),
+            message: "connection refused".into(),
         },
         TlsConnectError::Handshake { alert, message } => CollectionError::Error {
             native: Some("tls:handshake".into()),

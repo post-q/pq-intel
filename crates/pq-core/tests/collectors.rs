@@ -386,3 +386,101 @@ fn http_404_is_cached_negative() {
     assert_eq!(out.usage, Usage::Cached);
     assert_eq!(executor.requests.lock().unwrap().len(), 1);
 }
+
+// --- Refusal is an answer ----------------------------------------------------
+//
+// A refused connect is the endpoint answering "nothing listens here" -
+// definitive endpoint absence, knowledge like a dns NXDOMAIN. It is recorded
+// as a completed capture (not_found + a native reason), converges inside the
+// window, and is cached - never an error that retries forever.
+
+struct RefusedTlsConnector;
+
+impl pq_core::evidence::collectors::tls_connector::TlsConnector for RefusedTlsConnector {
+    fn connect(
+        &self,
+        _endpoint: &pq_core::evidence::collectors::tls_connector::TlsEndpoint,
+    ) -> Result<
+        pq_core::evidence::collectors::tls_connector::TlsSessionFacts,
+        pq_core::evidence::collectors::tls_connector::TlsConnectError,
+    > {
+        Err(pq_core::evidence::collectors::tls_connector::TlsConnectError::Refused)
+    }
+}
+
+#[test]
+fn tls_connection_refused_is_recorded_closed() {
+    let (_dir, store) = open_store();
+    let collector = pq_core::evidence::collectors::tls::TlsCollector {
+        connector: Arc::new(RefusedTlsConnector),
+    };
+    let req =
+        pq_core::evidence::collectors::tls::TlsRequest::new("closed.example.com", 443).unwrap();
+    let scan = store.begin_scan("test", json!({})).unwrap();
+    let out = scan
+        .collect(
+            &collector,
+            req.clone(),
+            F::MaxAge(Duration::from_secs(3600)),
+        )
+        .unwrap();
+    scan.finish().unwrap();
+    let obs = out.observation.as_ref().unwrap();
+    assert_eq!(obs.status, pq_core::evidence::ObservationStatus::NotFound);
+    assert_eq!(obs.native_status.as_deref(), Some("tls:closed"));
+
+    // Knowledge: the second identical request is served from the store.
+    let scan = store.begin_scan("test", json!({})).unwrap();
+    let out = scan
+        .collect(&collector, req, F::MaxAge(Duration::from_secs(3600)))
+        .unwrap();
+    scan.finish().unwrap();
+    assert_eq!(out.usage, Usage::Cached);
+}
+
+struct RefusedHttpExecutor;
+
+impl HttpExecutor for RefusedHttpExecutor {
+    fn execute(&self, _req: &HttpRequest) -> Result<HttpResponse, HttpExecError> {
+        Err(HttpExecError::Refused)
+    }
+}
+
+#[test]
+fn http_connection_refused_is_recorded_closed() {
+    let (_dir, store) = open_store();
+    let collector = HttpCollector {
+        http: Arc::new(RefusedHttpExecutor),
+    };
+    let req = HttpRequest_::get("https://closed.example.com/").unwrap();
+    let scan = store.begin_scan("test", json!({})).unwrap();
+    let out = scan
+        .collect(&collector, req, F::MaxAge(Duration::from_secs(3600)))
+        .unwrap();
+    scan.finish().unwrap();
+    let obs = out.observation.as_ref().unwrap();
+    assert_eq!(obs.status, pq_core::evidence::ObservationStatus::NotFound);
+    assert_eq!(obs.native_status.as_deref(), Some("http:closed"));
+}
+
+#[test]
+fn ureq_transport_surfaces_connection_refused() {
+    // Real socket: bind, then drop - connections to that port are refused.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    let ex = pq_core::evidence::http::UreqExecutor::new();
+    let err = ex
+        .execute(&HttpRequest {
+            url: format!("http://{addr}/"),
+            method: pq_core::evidence::http::HttpMethod::Get,
+            headers: vec![],
+            body: None,
+            timeout: Duration::from_secs(5),
+        })
+        .unwrap_err();
+    assert!(
+        matches!(err, HttpExecError::Refused),
+        "expected Refused, got {err:?}"
+    );
+}

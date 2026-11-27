@@ -51,6 +51,11 @@ pub struct HttpResponse {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpExecError {
+    /// The host answered and refused the connection: nothing listens on
+    /// the port. An answer about the world, not a failure - recorded as
+    /// a completed capture.
+    #[error("connection refused")]
+    Refused,
     /// Transport gave up: connection refused/reset, TLS failure.
     #[error("connection failed: {0}")]
     Connection(String),
@@ -138,6 +143,9 @@ impl HttpExecutor for UreqExecutor {
                     {
                         return Err(HttpExecError::Timeout(req.timeout));
                     }
+                    if transport_refused(&t) {
+                        return Err(HttpExecError::Refused);
+                    }
                     return Err(HttpExecError::Connection(t.to_string()));
                 }
             };
@@ -191,6 +199,29 @@ impl HttpExecutor for UreqExecutor {
 }
 
 const MAX_REDIRECTS: usize = 10;
+
+use std::error::Error as _;
+
+/// Whether a ureq transport failure is the OS-level connection refusal.
+/// Walks the error's source chain for the underlying `io::Error` (ureq
+/// wraps it), falling back to its message. Only a refusal counts - a
+/// reset or unreachable network stays an unknown.
+fn transport_refused(t: &ureq::Transport) -> bool {
+    if t.message()
+        .is_some_and(|m| m.contains("connection refused"))
+    {
+        return true;
+    }
+    let mut err: Option<&(dyn std::error::Error + 'static)> = t.source();
+    while let Some(e) = err {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            return io.kind() == std::io::ErrorKind::ConnectionRefused;
+        }
+        err = e.source();
+    }
+    false
+}
+
 /// 256 MiB cap, as the existing crt.sh fetch path uses.
 const MAX_BODY_BYTES: u64 = 256 * 1024 * 1024;
 
