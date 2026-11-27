@@ -379,10 +379,26 @@ pub mod presets {
             995 => "POP3S",
             636 => "LDAPS",
             5061 => "SIPS",
+            1883 => "MQTT",
             8883 => "MQTTS",
             5222 => "XMPP",
             5223 => "XMPPS",
             _ => "TLS",
+        }
+    }
+
+    /// Coarse service family of a swept port: the operator-facing verdict
+    /// vocabulary (mail, web, ldap, sip, xmpp, mqtt) the task-list
+    /// substates are built from. The default fallback family probes TLS
+    /// alternates, so the unnamed remainder reads as web.
+    pub fn port_family(port: u16) -> &'static str {
+        match port_service(port) {
+            "SMTP" | "SMTPS" | "IMAPS" | "POP3S" => "mail",
+            "LDAPS" => "ldap",
+            "SIPS" => "sip",
+            "MQTT" | "MQTTS" => "mqtt",
+            "XMPP" | "XMPPS" => "xmpp",
+            _ => "web",
         }
     }
 
@@ -427,6 +443,25 @@ default:
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn port_family_groups_the_verdict_vocabulary() {
+            assert_eq!(super::port_family(25), "mail");
+            assert_eq!(super::port_family(465), "mail");
+            assert_eq!(super::port_family(587), "mail");
+            assert_eq!(super::port_family(993), "mail");
+            assert_eq!(super::port_family(995), "mail");
+            assert_eq!(super::port_family(636), "ldap");
+            assert_eq!(super::port_family(5061), "sip");
+            assert_eq!(super::port_family(8883), "mqtt");
+            assert_eq!(super::port_family(1883), "mqtt");
+            assert_eq!(super::port_family(5222), "xmpp");
+            assert_eq!(super::port_family(5223), "xmpp");
+            // The default fallback family (TLS alternates) and any
+            // HTTPS port read as web.
+            assert_eq!(super::port_family(8443), "web");
+            assert_eq!(super::port_family(443), "web");
+        }
 
         #[test]
         fn family_matching_is_ordered() {
