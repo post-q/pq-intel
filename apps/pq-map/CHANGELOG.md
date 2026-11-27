@@ -1,5 +1,17 @@
 # Changelog
-## 0.8.2 - 2026-11-23
+## 0.9.0 - 2026-11-27
+
+### Documentation
+- The port sweep policy table is data
+
+### Features
+- --port-policy flag for the ports capture
+- CT chain walk rides the ct-db collection on one shared connection
+
+### Styling
+- Rustfmt
+
+## pq-pulse-v0.8.2 - 2026-11-23
 
 ### Bug Fixes
 - Ports acceptance assertion robust to multi-address localhost
@@ -9,6 +21,7 @@
 - The evidence plane — shared evidence store, collectors, pq-map, pq-pulse
 
 ### Miscellaneous Tasks
+- Release
 - Release
 
 ### Other

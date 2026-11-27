@@ -1,10 +1,11 @@
 # Changelog
-## 0.8.2 - 2026-11-23
+## pq-pulse-v0.8.2 - 2026-11-23
 
 ### Features
 - The evidence plane — shared evidence store, collectors, pq-map, pq-pulse
 
 ### Miscellaneous Tasks
+- Release
 - Release
 
 ### Other

@@ -1341,7 +1341,7 @@ dependencies = [
 
 [[package]]
 name = "pq-core"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "hickory-proto",
@@ -1365,7 +1365,7 @@ dependencies = [
 
 [[package]]
 name = "pq-map"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "futures",
@@ -1387,7 +1387,7 @@ dependencies = [
 
 [[package]]
 name = "pq-pulse"
-version = "0.8.2"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "clap",
