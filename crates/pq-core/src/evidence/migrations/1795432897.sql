@@ -1,7 +1,13 @@
--- v1 schema: the collection plane. Entities, facts, findings arrive in a
--- later migration. All timestamps are UTC Unix seconds.
+-- Epoch 1795432897 (2026-11-23): the collection plane. Entities, facts,
+-- findings arrive in their own later migration. All timestamps are UTC
+-- Unix seconds.
+--
+-- IF NOT EXISTS / OR IGNORE throughout: the command must also adopt
+-- stores whose ledger predates the epoch renaming (they record versions
+-- 1..4 and already carry this schema; every statement here is then a
+-- no-op). On a fresh store the command builds exactly this schema.
 
-CREATE TABLE refresh_policies (
+CREATE TABLE IF NOT EXISTS refresh_policies (
     id             INTEGER PRIMARY KEY,
     kind           TEXT NOT NULL,
     name           TEXT NOT NULL,
@@ -13,7 +19,7 @@ CREATE TABLE refresh_policies (
     UNIQUE (kind, name)
 );
 
-CREATE TABLE scans (
+CREATE TABLE IF NOT EXISTS scans (
     id          INTEGER PRIMARY KEY,
     tool        TEXT NOT NULL,
     invocation  TEXT NOT NULL DEFAULT '{}',  -- JSON: argv/parameters of the run
@@ -21,16 +27,16 @@ CREATE TABLE scans (
     finished_at INTEGER
 );
 
-CREATE TABLE collections (
+CREATE TABLE IF NOT EXISTS collections (
     id             INTEGER PRIMARY KEY,
     collection_key BLOB NOT NULL UNIQUE CHECK (length(collection_key) = 32),
     kind           TEXT NOT NULL,
     params         TEXT NOT NULL,       -- JSON; key-affecting parameters, secrets excluded
     policy_id      INTEGER REFERENCES refresh_policies(id)
 );
-CREATE INDEX idx_collections_kind ON collections(kind);
+CREATE INDEX IF NOT EXISTS idx_collections_kind ON collections(kind);
 
-CREATE TABLE collection_state (
+CREATE TABLE IF NOT EXISTS collection_state (
     collection_id   INTEGER PRIMARY KEY REFERENCES collections(id),
     latest_observation_id        INTEGER REFERENCES observations(id),  -- last attempt, any outcome
     next_refresh_at INTEGER,            -- maintained on write; consumed by nothing in v1 (no runner exists)
@@ -38,7 +44,7 @@ CREATE TABLE collection_state (
     lease_until     INTEGER             -- reserved for cross-process leases; no lease logic in v1
 );
 
-CREATE TABLE observations (
+CREATE TABLE IF NOT EXISTS observations (
     id            INTEGER PRIMARY KEY,
     collection_id INTEGER NOT NULL REFERENCES collections(id),
     scan_id       INTEGER NOT NULL REFERENCES scans(id),
@@ -49,10 +55,10 @@ CREATE TABLE observations (
     fresh_until   INTEGER,              -- computed from policy + source metadata; never a claim of verified currency
     metadata      TEXT NOT NULL DEFAULT '{}'  -- JSON: small structured result (not bulk evidence)
 );
-CREATE INDEX idx_observations_collection_time ON observations(collection_id, observed_at);
-CREATE INDEX idx_observations_scan ON observations(scan_id);
+CREATE INDEX IF NOT EXISTS idx_observations_collection_time ON observations(collection_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_observations_scan ON observations(scan_id);
 
-CREATE TABLE artifacts (
+CREATE TABLE IF NOT EXISTS artifacts (
     id                INTEGER PRIMARY KEY,
     hash              BLOB NOT NULL UNIQUE CHECK (length(hash) = 32),  -- SHA-256 of the ORIGINAL uncompressed bytes
     size_uncompressed INTEGER NOT NULL,
@@ -61,25 +67,25 @@ CREATE TABLE artifacts (
     created_at        INTEGER NOT NULL
 );
 
-CREATE TABLE observation_artifacts (
+CREATE TABLE IF NOT EXISTS observation_artifacts (
     observation_id INTEGER NOT NULL REFERENCES observations(id),
     artifact_id    INTEGER NOT NULL REFERENCES artifacts(id),
     role           TEXT NOT NULL,       -- response_body, response_headers, redirect_chain, leaf_certificate, ...
     PRIMARY KEY (observation_id, artifact_id, role)
 );
-CREATE INDEX idx_observation_artifacts_artifact ON observation_artifacts(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_observation_artifacts_artifact ON observation_artifacts(artifact_id);
 
-CREATE TABLE scan_observations (
+CREATE TABLE IF NOT EXISTS scan_observations (
     scan_id        INTEGER NOT NULL REFERENCES scans(id),
     observation_id INTEGER NOT NULL REFERENCES observations(id),
     usage          TEXT NOT NULL CHECK (usage IN ('collected', 'cached', 'refreshed', 'historical')),
     PRIMARY KEY (scan_id, observation_id)
 );
-CREATE INDEX idx_scan_observations_observation ON scan_observations(observation_id);
+CREATE INDEX IF NOT EXISTS idx_scan_observations_observation ON scan_observations(observation_id);
 
 -- Default refresh policies (long-form spec §9 table; all values configurable at
 -- runtime through the policy API — this table is data, not code).
-INSERT INTO refresh_policies (kind, name, fresh_for_secs, allow_stale, stale_for_secs, ttl_min_secs, ttl_max_secs) VALUES
+INSERT OR IGNORE INTO refresh_policies (kind, name, fresh_for_secs, allow_stale, stale_for_secs, ttl_min_secs, ttl_max_secs) VALUES
     ('ct',             'default',  NULL, 0, NULL, NULL, NULL),      -- CT results cached indefinitely
     ('x509',           'default',  NULL, 0, NULL, NULL, NULL),      -- X.509 certificate content cached indefinitely
     ('rdap',           'default',  604800, 0, NULL, NULL, NULL),   -- RDAP: 7 days (configurable 7-30)

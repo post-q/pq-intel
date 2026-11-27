@@ -669,7 +669,11 @@ fn scan_task_id_is_plain_data() {
             Ok(v)
         })
         .unwrap();
-    assert_eq!(rows, vec![Some(7), None], "extracted once at write; task-less stays NULL");
+    assert_eq!(
+        rows,
+        vec![Some(7), None],
+        "extracted once at write; task-less stays NULL"
+    );
 }
 
 fn policy_expired_immediately(kind: &str) -> pq_core::evidence::Policy {

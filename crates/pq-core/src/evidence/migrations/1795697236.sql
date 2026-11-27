@@ -1,4 +1,5 @@
--- v3: refresh policy for the ASN capture (kind `asn`): IP registration
+-- Epoch 1795697236 (2026-11-26): refresh policy for the ASN capture (kind
+-- `asn`): IP registration
 -- facts from the RIPEstat `network-info` endpoint. Registration-shaped:
 -- fresh ~30d, matching the ripestat/network-info seed (the canonical
 -- resource is the IP, so one lookup serves every hostname on it).

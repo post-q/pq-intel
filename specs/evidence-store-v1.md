@@ -68,10 +68,10 @@ Principle: *collect once, reuse across tools, retain evidence, avoid unnecessary
 - Dependency direction: apps (`pq-map`, `pq-pulse`) depend on `pq-core`; `pq-attribution` (v2) depends on `pq-core` and reads observations; `pq-graph` is untouched JS.
 - Scale target is thousands of observations. Nothing in v1 exists to serve 10M/100M: no packed/object backends, no compaction, no integrity-check scheduling. SQLite handles this scale trivially.
 
-**Schema (v1 migration creates exactly these tables)**
+**Schema (the first migration creates exactly these tables)**
 
 - `refresh_policies`, `collections`, `collection_state`, `observations`, `artifacts`, `observation_artifacts`, `scans`, `scan_observations` — as specified in the long-form spec §§4.1–5, with constraints and the documented indexes.
-- Entities, facts, fact_evidence, fact_assertions, findings, finding_dependencies are **not** in the v1 migration; they arrive in a v2 migration.
+- Entities, facts, fact_evidence, fact_assertions, findings, finding_dependencies are **not** yet in any migration; they arrive in their own later migration.
 - PRAGMAs: `foreign_keys = ON`, `journal_mode = WAL`, plus a busy timeout for multi-process CLI access. All timestamps are UTC Unix seconds.
 - `collections.collection_key`: SHA-256 over a canonical representation of the request identity. A canonicalization version constant is prefixed into the digest input, so changing canonicalization yields new identities rather than aliasing old data. Parameters that affect the response are included (TLS: endpoint, SNI, ALPN, client config; DNS: name, type, class, resolver identity; HTTP: URL, method, relevant headers, body identity; RIPEstat: endpoint + resource + parameters). Credentials and secrets are never stored in keys or plaintext parameters.
 - `collection_state` keeps `lease_owner`/`lease_until` columns in the schema, but v1 implements no lease logic (reserved for when parallel scheduled runs actually collide).
@@ -110,9 +110,9 @@ enum DataStatus { Fresh, Stale, Expired, Unavailable }
 - **HTTP**: URL-targeted; status, headers, body, redirect chain; conditional revalidation as above.
 - **TLS**: endpoint-targeted; protocol, cipher suite, key exchange, served chain; SNI/ALPN in the key. One definition of the TLS observation replaces both tools' formats (`pq-map`'s "pq-pulse-compatible presentation" hack dies).
 - **CT**: crt.sh certwatch lookups (Postgres read path kept thin, with its row→observation mapping extracted as a pure function; HTTP fallback goes through the shared HTTP executor). Cached indefinitely.
-- **RDAP**: by canonical lookup target and provider; original JSON preserved as artifact; normalized extraction deferred to v2.
+- **RDAP**: by canonical lookup target and provider; original JSON preserved as artifact; normalized extraction deferred to the next plane.
 - **RIPEstat**: per-endpoint identities (`ripestat.network-info`, `ripestat.routing-status`, …) with per-endpoint policies; historical (finalized-interval) queries cached indefinitely.
-- **ASN** *(amended 2026-11-25, v1.2 vendor chain)*: the `asn` capture kind — `network-info` only, keyed by canonical IP; registration-shaped policy (`asn`/`network-info`, fresh ~30d, seeded by the v3 migration). One registration lookup serves every hostname on the IP. Triggered by the sensor fleet off stored DNS facts (see `sensor-fleet-v1.md` v1.2).
+- **ASN** *(amended 2026-11-25, v1.2 vendor chain)*: the `asn` capture kind — `network-info` only, keyed by canonical IP; registration-shaped policy (`asn`/`network-info`, fresh ~30d, seeded by the epoch-1795697236 migration). One registration lookup serves every hostname on the IP. Triggered off stored DNS facts by scheduled collection (the tasking plane that drives it is documented separately, not part of this repository).
 - Domain/hostname normalization reuses `pq-core`'s existing normalization logic.
 - *(Amended 2026-11-23, user decision: the no-reinvented-wheels line is enforced — all certwatch semantics (`ctdate`, name/coverage/serial/validity math), X.509 naming (OID tables, canonical signature/key names, cipher suites), and port presets live in `pq-core` (`evidence::collectors::ct`, `x509`, `collectors::ports::presets`). pq-map and pq-pulse keep only presentation and their own decision models; edge binaries never copy core data tables or policy. Same line, same day, applied to the rest of the surface: the OpenSSL legacy TLS transport (`collectors::openssl_tls`, feature `openssl-tls` — TLS 1.0/1.1, `SECLEVEL=0`) produces the shared `TlsSessionFacts` beside the rustls connector; DNS presentation-format parsing (`parse_mx/srv/svcb_presentation`) and the well-known SRV sweep vocabulary live in `collectors::dns`; the `in_domain` host-boundary check in `net`. Edge binaries keep orchestration, display labels, and model mapping only.)*
 
@@ -151,7 +151,7 @@ Prior art: `pq-pulse`'s offline integration test of the decision model (fixture-
 
 ## Out of Scope
 
-- **Entities, facts, extractors, findings, attribution** — v2 (temporal-first invalidation: a finding goes stale when a dependency observation is newer than its calculation; typed/semantic dependency tracking only when false-stale rate demands it). The v2 schema migration adds those tables.
+- **Entities, facts, extractors, findings, attribution** — next plane (temporal-first invalidation: a finding goes stale when a dependency observation is newer than its calculation; typed/semantic dependency tracking only when false-stale rate demands it). A dedicated later schema migration adds those tables.
 - **Retention / GC** — no artifact or observation pruning in v1. Trigger: bulk zone-wide scheduled collection (e.g., weekly `gov.pl` runs) becoming real.
 - **Cross-process leases** — columns reserved, logic unimplemented. Trigger: parallel scheduled runs actually colliding.
 - **SQLite-blob, packed, or object artifact backends** — filesystem backend only; the `ArtifactStore` trait is the seam for later backends.

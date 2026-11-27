@@ -35,6 +35,7 @@ pub mod error;
 pub mod flight;
 pub mod freshness;
 pub mod key;
+pub mod migrations;
 pub mod observation;
 pub mod policy;
 pub mod scan;
